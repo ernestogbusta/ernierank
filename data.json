@@ -1,5 +1,4 @@
 {
-  "url": "https://aulacm.com",
   "h1": [
     "Escuela de\nComunicaci\u00f3n y Marketing Digital"
   ],
@@ -42,19 +41,5 @@
   "description": [
     "Escuela de Comunicaci\u00f3n y Marketing en Madrid. Cursos de Community Manager, Social Media, SEO, WordPress, Adwords y M\u00e1ster en Marketing Digital"
   ],
-  "title": [
-    "Aula CM | Escuela de Comunicaci\u00f3n y Marketing Digital"
-  ],
-  "canonical": [
-    "https://aulacm.com/"
-  ],
-  "hreflang": [
-    "https://aulacm.com/feed/",
-    "https://aulacm.com/comments/feed/",
-    "https://aulacm.com/inicio/feed/",
-    "https://aulacm.com/wp-json/wp/v2/pages/4910"
-  ],
-  "robot_tag": [
-    "index, follow, max-image-preview:large, max-snippet:-1, max-video-preview:-1"
-  ]
+  "title": "Aula CM | Escuela de Comunicaci\u00f3n y Marketing Digital"
 }

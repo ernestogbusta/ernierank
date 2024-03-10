@@ -1,31 +1,37 @@
-#!/usr/bin/env python
-'''
-Opens Firefox
-Visit URL provided by the user
-Print the HTML of the page
-Close browser.
-'''
 import time
 import sys
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options
 from selenium.webdriver.firefox.service import Service
 
-# Check if a URL has been provided as an argument
-if len(sys.argv) > 1:
-    url = sys.argv[1]
-else:
-    print("Please provide a URL as an argument.")
-    sys.exit(1)
+def open_firefox_and_print_html(url, headless=True):
+    """
+    Abre Firefox con la URL proporcionada, imprime el HTML de la página y cierra el navegador.
+    
+    Args:
+    - url: URL de la página a visitar.
+    - headless: Si True, ejecuta Firefox en modo headless (sin interfaz gráfica).
+    """
+    options = Options()
+    if headless:
+        options.add_argument("--headless")
+    
+    try:
+        service = Service(executable_path='/usr/local/bin/geckodriver')
+        driver = webdriver.Firefox(service=service, options=options)
+        driver.get(url)
+        
+        # Esperar a que la página se cargue completamente. Ajustar según necesidad.
+        time.sleep(3)
+        
+        print(driver.page_source)
+    except Exception as e:
+        print(f"Error al abrir la página: {e}")
+    finally:
+        driver.quit()
 
-options = Options()
-options.headless = True  # Uncomment if you want Firefox to run headlessly
-
-service = Service(executable_path='/usr/local/bin/geckodriver')
-driver = webdriver.Firefox(service=service, options=options)
-
-driver.get(url)             # Visit URL provided by the user
-
-print(driver.page_source)   # Print HTML of the page
-time.sleep(3)               # Wait 3 Seconds
-driver.quit()               # Close the browser
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        open_firefox_and_print_html(sys.argv[1])
+    else:
+        print("Por favor, proporciona una URL como argumento.")

@@ -1,37 +1,46 @@
-# Read a RSS Feed with Python and BeautifulSoup
-
-from bs4 import BeautifulSoup
 import requests
+from bs4 import BeautifulSoup
 
-headers = {
-            'User-Agent': 'your-user-agent-here'
-        }
-
-class ReadRss:
-
-    def __init__(self, rss_url, headers):
-
+class RSSReader:
+    def __init__(self, rss_url):
         self.url = rss_url
-        self.headers = headers
+        self.articles_dicts = []
+
+    def fetch_rss(self):
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+        }
         try:
-            self.r = requests.get(rss_url, headers=self.headers)
-            self.status_code = self.r.status_code
+            response = requests.get(self.url, headers=headers)
+            if response.status_code == 200:
+                self.parse_rss(response.text)
+                return True
+            else:
+                print(f'Failed to fetch RSS feed: HTTP Status Code {response.status_code}')
+                return False
         except Exception as e:
-            print('Error fetching the URL: ', rss_url)
-            print(e)
-        try:    
-            self.soup = BeautifulSoup(self.r.text, 'lxml')
-        except Exception as e:
-            print('Could not parse the xml: ', self.url)
-            print(e)
-        self.articles = self.soup.findAll('item')
-        self.articles_dicts = [{'title':a.find('title').text,'link':a.link.next_sibling.replace('\n','').replace('\t',''),'description':a.find('description').text,'pubdate':a.find('pubdate').text} for a in self.articles]
-        self.urls = [d['link'] for d in self.articles_dicts if 'link' in d]
-        self.titles = [d['title'] for d in self.articles_dicts if 'title' in d]
-        self.descriptions = [d['description'] for d in self.articles_dicts if 'description' in d]
-        self.pub_dates = [d['pubdate'] for d in self.articles_dicts if 'pubdate' in d]
+            print(f'Error fetching the URL: {self.url}\n{e}')
+            return False
+
+    def parse_rss(self, rss_content):
+        soup = BeautifulSoup(rss_content, 'xml')  # Use 'xml' parser for better RSS handling
+        articles = soup.findAll('item')
+        self.articles_dicts = [
+            {
+                'title': article.find('title').text,
+                'link': article.find('link').next_sibling.strip(),
+                'description': article.find('description').text,
+                'pubdate': article.find('pubDate').text
+            } for article in articles
+        ]
+
+    def get_articles(self):
+        return self.articles_dicts
 
 if __name__ == '__main__':
-
-    feed = ReadRss('https://www.jcchouinard.com/author/jean-christophe-chouinard/feed/', headers)
-    print(feed.urls)
+    rss_url = 'https://www.jcchouinard.com/author/jean-christophe-chouinard/feed/'
+    reader = RSSReader(rss_url)
+    if reader.fetch_rss():
+        articles = reader.get_articles()
+        for article in articles:
+            print(article['title'])
