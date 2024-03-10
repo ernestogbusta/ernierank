@@ -1,7 +1,5 @@
 services:
   - name: web
     env: python
-    buildCommand: |
-      pip install -r requirements.txt
-      pip install reppy==0.4.14
-    startCommand: python main.py
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn main:app -b :10000
