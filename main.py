@@ -1,9 +1,8 @@
 from flask import Flask, request, jsonify
-import sys
-# Importa tus scripts mejorados como módulos
+# Asegúrate de que las importaciones reflejen la estructura actual de tus módulos y clases
 from robots_parser import EnhancedRobotsParser
 from rss_reader import RSSReader
-from get_all_links import fetch_headings
+from get_all_links import LinkExtractor  # Actualizado para usar la clase LinkExtractor
 from simple_request import make_request
 
 app = Flask(__name__)
@@ -37,8 +36,11 @@ def scrape_links():
     url = request.json.get('url')
     if not url:
         return jsonify({'error': 'URL no proporcionada'}), 400
-    links = fetch_headings(url)
-    return jsonify({'links': links})
+    extractor = LinkExtractor(url)
+    if extractor.fetch_and_extract_links():
+        return jsonify({'links': extractor.links})
+    else:
+        return jsonify({'error': 'No se pudieron extraer links de la URL proporcionada'}), 500
 
 @app.route('/scrape/simple_request', methods=['POST'])
 def simple_request_route():
