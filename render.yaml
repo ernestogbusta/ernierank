@@ -2,4 +2,4 @@ services:
   - name: web
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app -b :10000
+    startCommand: gunicorn main:app -b :$PORT

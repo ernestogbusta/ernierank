@@ -1,0 +1,3 @@
+FLASK_APP=main.py
+FLASK_ENV=production
+VIRTUAL_ENV=/Users/ernestogarciabustamante/ernierank/mi_entorno_virtual
