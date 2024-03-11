@@ -52,3 +52,4 @@ Werkzeug==3.0.1
 wheel==0.42.0
 wsproto==1.2.0
 zipp==3.17.0
+reppy==0.4.14
