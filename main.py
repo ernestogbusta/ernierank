@@ -1,10 +1,19 @@
-from flask import Flask, request, jsonify
+from api_key import API_KEY
+from flask import Flask, request, jsonify, abort
 from robots_parser import EnhancedRobotsParser
 from rss_reader import RSSReader
 from get_all_links import LinkExtractor
 from simple_request import make_request
 
 app = Flask(__name__)
+
+def verify_api_key():
+    """Verifica que la solicitud contenga una API key válida."""
+    api_key = request.headers.get('X-API-KEY')
+    if not api_key or api_key != API_KEY:
+        abort(401, description="API Key no válida o no proporcionada.")
+
+app.before_request(verify_api_key)
 
 @app.route('/scrape/all', methods=['POST'])
 def scrape_all():
