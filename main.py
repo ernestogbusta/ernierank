@@ -1,54 +1,45 @@
 from flask import Flask, request, jsonify
-# Asegúrate de que las importaciones reflejen la estructura actual de tus módulos y clases
 from robots_parser import EnhancedRobotsParser
 from rss_reader import RSSReader
-from get_all_links import LinkExtractor  # Actualizado para usar la clase LinkExtractor
+from get_all_links import LinkExtractor
 from simple_request import make_request
 
 app = Flask(__name__)
 
-@app.route('/scrape/robots', methods=['POST'])
-def scrape_robots():
+@app.route('/scrape/all', methods=['POST'])
+def scrape_all():
     url = request.json.get('url')
     if not url:
         return jsonify({'error': 'URL no proporcionada'}), 400
+
+    # Inicializa el resultado agrupado
+    result = {}
+
+    # Robots
     parser = EnhancedRobotsParser(url)
     data = parser.fetch_and_parse()
-    if data:
-        return jsonify(data)
-    else:
-        return jsonify({'error': 'No se pudo raspar la URL proporcionada'}), 500
+    result['robots'] = data if data else 'No se pudo raspar la URL proporcionada para robots.txt'
 
-@app.route('/scrape/rss', methods=['POST'])
-def scrape_rss():
-    url = request.json.get('url')
-    if not url:
-        return jsonify({'error': 'URL no proporcionada'}), 400
+    # RSS
     reader = RSSReader(url)
     if reader.fetch_rss():
         articles = reader.get_articles()
-        return jsonify({'articles': articles})
+        result['rss'] = {'articles': articles}
     else:
-        return jsonify({'error': 'No se pudo obtener el feed RSS'}), 500
+        result['rss'] = 'No se pudo obtener el feed RSS'
 
-@app.route('/scrape/links', methods=['POST'])
-def scrape_links():
-    url = request.json.get('url')
-    if not url:
-        return jsonify({'error': 'URL no proporcionada'}), 400
+    # Links
     extractor = LinkExtractor(url)
     if extractor.fetch_and_extract_links():
-        return jsonify({'links': extractor.links})
+        result['links'] = extractor.links
     else:
-        return jsonify({'error': 'No se pudieron extraer links de la URL proporcionada'}), 500
+        result['links'] = 'No se pudieron extraer links de la URL proporcionada'
 
-@app.route('/scrape/simple_request', methods=['POST'])
-def simple_request_route():
-    url = request.json.get('url')
-    if not url:
-        return jsonify({'error': 'URL no proporcionada'}), 400
-    response = make_request(url)
-    return jsonify(response)
+    # Simple request
+    simple_response = make_request(url)
+    result['simple_request'] = simple_response if simple_response else 'No se pudo realizar la solicitud simple a la URL proporcionada'
+
+    return jsonify(result)
 
 if __name__ == '__main__':
     app.run(debug=True)
