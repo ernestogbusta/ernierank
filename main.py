@@ -4,6 +4,8 @@ from robots_parser import EnhancedRobotsParser
 from rss_reader import RSSReader
 from get_all_links import LinkExtractor
 from simple_request import make_request
+# Asume que scrape_sitemap está definido en sitemap_crawler.py
+from sitemap_crawler import crawl_sitemap
 
 app = Flask(__name__)
 
@@ -23,6 +25,10 @@ def scrape_all():
 
     # Inicializa el resultado agrupado
     result = {}
+
+    # Sitemap scraping
+    sitemap_data = scrape_sitemap(url)
+    result['sitemap'] = sitemap_data if sitemap_data else 'No se pudo raspar la información del sitemap'
 
     # Robots
     parser = EnhancedRobotsParser(url)
