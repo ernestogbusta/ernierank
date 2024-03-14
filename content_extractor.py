@@ -17,9 +17,10 @@ class ContentExtractor:
                 return response.content
             else:
                 print(f"Failed to fetch URL: HTTP Status Code {response.status_code}")
+                return None
         except requests.exceptions.RequestException as e:
             print(f"Error fetching the URL: {self.url}\n{e}")
-        return None
+            return None
 
     def extract_links_and_headings(self, content):
         webpage = html.fromstring(content)
