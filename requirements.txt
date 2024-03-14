@@ -5,8 +5,10 @@ blinker==1.7.0
 bs4==0.0.2
 cachetools==5.3.3
 certifi==2024.2.2
+cffi==1.16.0
 charset-normalizer==3.3.2
 click==8.1.7
+cryptography==42.0.5
 cssselect==1.2.0
 Cython==3.0.9
 fake-useragent==1.5.0
@@ -25,13 +27,16 @@ packaging==24.0
 pandas==2.2.1
 parse==1.20.1
 pillow==10.2.0
+pycparser==2.21
 pyee==11.1.0
+pyOpenSSL==24.1.0
 pyppeteer==2.0.0
 pyquery==2.0.0
 PySocks==1.7.1
 python-dateutil==2.9.0.post0
 pytz==2024.1
 regex==2023.12.25
+reppy==0.4.14
 requests==2.31.0
 requests-html==0.10.0
 selenium==4.18.1
@@ -46,6 +51,7 @@ trio-websocket==0.11.1
 typing_extensions==4.10.0
 tzdata==2024.1
 urllib3==1.26.18
+urllib3-secure-extra==0.1.0
 w3lib==2.1.2
 websockets==10.4
 Werkzeug==3.0.1

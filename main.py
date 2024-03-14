@@ -1,11 +1,8 @@
 from api_key import API_KEY
 from flask import Flask, request, jsonify, abort
-from robots_parser import EnhancedRobotsParser
-from rss_reader import RSSReader
-from get_all_links import LinkExtractor
-from simple_request import make_request
-# Asume que crawl_sitemap está definido en sitemap_crawler.py
 from sitemap_crawler import crawl_sitemap
+# Asume que ContentExtractor es tu nuevo módulo fusionado que maneja la extracción de contenido
+from content_extractor import ContentExtractor
 
 app = Flask(__name__)
 
@@ -23,36 +20,19 @@ def scrape_all():
     if not url:
         return jsonify({'error': 'URL no proporcionada'}), 400
 
-    # Inicializa el resultado agrupado
     result = {}
 
     # Sitemap scraping
     sitemap_data = crawl_sitemap(url)
     result['sitemap'] = sitemap_data if sitemap_data else 'No se pudo raspar la información del sitemap'
 
-    # Robots
-    parser = EnhancedRobotsParser(url)
-    data = parser.fetch_and_parse()
-    result['robots'] = data if data else 'No se pudo raspar la URL proporcionada para robots.txt'
-
-    # RSS
-    reader = RSSReader(url)
-    if reader.fetch_rss():
-        articles = reader.get_articles()
-        result['rss'] = {'articles': articles}
+    # Contenido
+    content_data = ContentExtractor(url)  # Suponiendo que ContentExtractor maneja todo
+    extracted_data = content_data.extract_content()  # Asegúrate de ajustar este método a tu implementación real
+    if extracted_data:
+        result['content'] = extracted_data
     else:
-        result['rss'] = 'No se pudo obtener el feed RSS'
-
-    # Links
-    extractor = LinkExtractor(url)
-    if extractor.fetch_and_extract_links():
-        result['links'] = extractor.links
-    else:
-        result['links'] = 'No se pudieron extraer links de la URL proporcionada'
-
-    # Simple request
-    simple_response = make_request(url)
-    result['simple_request'] = simple_response if simple_response else 'No se pudo realizar la solicitud simple a la URL proporcionada'
+        result['content'] = 'No se pudo procesar el contenido de la URL proporcionada'
 
     return jsonify(result)
 

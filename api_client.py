@@ -1,14 +1,19 @@
 import requests
 
 def hacer_solicitud_a_api(url_destino):
-    api_url = "https://ernierank-vd20.onrender.com/scrape/all"  # Asegúrate de reemplazar esto con la URL real de tu API
-    API_KEY = "tu_api_key_secreta"  # Asegúrate de reemplazar esto con tu API key real
-    headers = {"Authorization": f"Bearer fba647b41ae2483bd9d4dc19bd90ab94"}
+    api_url = "https://ernierank-vd20.onrender.com/scrape/all"
+    API_KEY = "fba647b41ae2483bd9d4dc19bd90ab94"
+    headers = {"Authorization": f"Bearer {API_KEY}"}
     data = {"url": url_destino}
 
-    response = requests.post(api_url, json=data, headers=headers)
-
-    if response.status_code == 200:
+    try:
+        response = requests.post(api_url, json=data, headers=headers)
+        response.raise_for_status()  # Esto asegura que se manejen respuestas con error.
         return response.json()
-    else:
-        raise Exception(f"Error al llamar a la API: {response.status_code}, Respuesta: {response.text}")
+    except requests.HTTPError as e:
+        # Manejo específico de errores HTTP, p. ej., 404 Not Found, 500 Internal Server Error.
+        print(f"Error HTTP al llamar a la API: {e}")
+    except requests.RequestException as e:
+        # Manejo de otros errores de solicitud, p. ej., problemas de red.
+        print(f"Error al llamar a la API: {e}")
+    return None
