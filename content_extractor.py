@@ -36,19 +36,27 @@ class ContentExtractor:
 
         return links, headings
 
+    def extract_content(self):
+        content = self.fetch_page_content()
+        if content:
+            links, headings = self.extract_links_and_headings(content)
+            soup = BeautifulSoup(content, 'lxml')
+            body_text = soup.get_text(separator=' ', strip=True)  # Extrae todo el texto del cuerpo
+            return {
+                'links': links,
+                'headings': headings,
+                'body_text': body_text  # Asegúrate de agregar esto a tu respuesta JSON
+            }
+        else:
+            return None
+
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         url = sys.argv[1]
         extractor = ContentExtractor(url)
-        page_content = extractor.fetch_page_content()
-        if page_content:
-            links, headings = extractor.extract_links_and_headings(page_content)
-            print("Links obtenidos exitosamente:")
-            for link in links:
-                print(link)
-            print("\nEncabezados extraídos exitosamente:")
-            for tag, texts in headings.items():
-                for text in texts:
-                    print(f'{tag}: {text}')
+        extracted_data = extractor.extract_content()  # Usa el nuevo método
+        if extracted_data:
+            print("Datos extraídos exitosamente:")
+            print(extracted_data)
     else:
         print("Por favor, proporciona una URL como argumento.")
