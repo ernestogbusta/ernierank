@@ -1,7 +1,9 @@
-from api_key import API_KEY
 from flask import Flask, request, jsonify, abort
 from sitemap_crawler import crawl_sitemap
 from content_extractor import ContentExtractor
+
+# Suponiendo que API_KEY está definida en api_key.py o directamente aquí
+API_KEY = "fba647b41ae2483bd9d4dc19bd90ab94"
 
 app = Flask(__name__)
 
@@ -15,27 +17,27 @@ app.before_request(verify_api_key)
 
 @app.route('/scrape/all', methods=['POST'])
 def scrape_all():
-    body = request.get_json()
-    if not body or 'url' not in body:
-        return jsonify({'error': 'URL no proporcionada'}), 400
+    data = request.json
+    if 'url' not in data:
+        return jsonify({'error': 'URL not provided'}), 400
 
-    url = body['url']
+    url = data['url']
     result = {}
 
     # Sitemap scraping
-    sitemap_urls, sitemap_error = crawl_sitemap(url)
+    sitemap_urls = crawl_sitemap(url)
     if sitemap_urls:
         result['sitemap_urls'] = sitemap_urls
     else:
-        result['sitemap_error'] = sitemap_error or "Error al obtener URLs del sitemap."
+        result['sitemap_error'] = "Failed to retrieve or parse sitemap."
 
     # Contenido
     content_extractor = ContentExtractor(url)
-    content_data, content_error = content_extractor.extract_content()
+    content_data = content_extractor.extract_content()
     if content_data:
-        result.update(content_data)  # Se espera que content_data sea un diccionario
+        result.update(content_data)  # Se espera que content_data sea un diccionario con 'links', 'headings', y 'body_text'
     else:
-        result['content_error'] = content_error or "Error al procesar el contenido de la URL."
+        result['content_error'] = "Failed to process the URL content."
 
     return jsonify(result)
 

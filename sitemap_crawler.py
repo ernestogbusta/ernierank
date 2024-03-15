@@ -1,61 +1,42 @@
 import requests
-from bs4 import BeautifulSoup
 import xml.etree.ElementTree as ET
-from urllib.parse import urlparse
-import time
 
-def fetch_and_parse(url, visited, headers=None):
-    if url in visited:
-        print(f"URL already processed: {url}")
-        return None
-    visited.add(url)
-
-    headers = headers or {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
-    }
+def fetch_sitemap(url):
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.text
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching URL: {e}")
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.content
+    except requests.exceptions.RequestException:
         return None
 
-def parse_sitemap(content, sitemap_urls, visited, headers=None):
+def parse_sitemap(content):
+    sitemap_urls = []
     try:
         root = ET.fromstring(content)
-        namespace = {'sitemap': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
-        for elem in root.findall(".//*"):
-            if elem.tag == "{http://www.sitemaps.org/schemas/sitemap/0.9}loc":
-                url = elem.text
-                if url not in visited:
-                    sitemap_urls.add(url)
-    except ET.ParseError as e:
-        print(f"Error parsing XML: {e}")
-    return sitemap_urls
+        for url in root.findall("{http://www.sitemaps.org/schemas/sitemap/0.9}url"):
+            loc = url.find("{http://www.sitemaps.org/schemas/sitemap/0.9}loc")
+            if loc is not None:
+                sitemap_urls.append(loc.text)
+        return sitemap_urls
+    except ET.ParseError:
+        return None
 
-def crawl_sitemap(sitemap_url, headers=None):
-    visited, sitemap_urls = set(), set()
-    content = fetch_and_parse(sitemap_url, visited, headers=headers)
+def crawl_sitemap(sitemap_url):
+    content = fetch_sitemap(sitemap_url)
     if content:
-        sitemap_urls = parse_sitemap(content, sitemap_urls, visited, headers=headers)
-        for url in sitemap_urls:
-            time.sleep(1)  # Courtesy delay
-            if url.endswith('.xml'):
-                # Handle nested sitemap
-                nested_content = fetch_and_parse(url, visited, headers=headers)
-                if nested_content:
-                    parse_sitemap(nested_content, sitemap_urls, visited, headers=headers)
-            else:
-                # Here you can handle the individual URL processing
-                print(f"URL to process: {url}")
+        return parse_sitemap(content)
     else:
-        print("Failed to retrieve or parse sitemap.")
+        return None
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1:
         sitemap_url = sys.argv[1]
-        crawl_sitemap(sitemap_url)
+        urls = crawl_sitemap(sitemap_url)
+        if urls:
+            print(f"Sitemap URLs: {urls}")
+        else:
+            print("Failed to retrieve or parse sitemap.")
     else:
         print("Please provide a sitemap URL as an argument.")
