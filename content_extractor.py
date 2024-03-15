@@ -1,5 +1,7 @@
 import requests
+from lxml import html
 from bs4 import BeautifulSoup
+import sys
 
 class ContentExtractor:
     def __init__(self, url):
@@ -11,27 +13,48 @@ class ContentExtractor:
         }
         try:
             response = requests.get(self.url, headers=headers)
-            return response if response.status_code == 200 else None
-        except requests.exceptions.RequestException:
+            if response.status_code == 200:
+                return response.content
+            else:
+                print(f"Failed to fetch URL: HTTP Status Code {response.status_code}")
+                return None
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching the URL: {self.url}\n{e}")
             return None
 
+    def extract_links_and_headings(self, content):
+        webpage = html.fromstring(content)
+        soup = BeautifulSoup(content, "lxml")
+
+        # Extract links
+        links = webpage.xpath('//a/@href')
+
+        # Corrected way to extract headings
+        headings = {tag: [heading.get_text(strip=True) for heading in soup.find_all(tag)] for tag in ['h1', 'h2', 'h3']}
+
+        return links, headings
+
     def extract_content(self):
-        response = self.fetch_page_content()
-        if response:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            body_text = soup.get_text(separator=' ', strip=True)
-            headings = {tag.name: [heading.get_text(strip=True) for heading in soup.find_all(tag.name)] for tag in ['h1', 'h2', 'h3']}
-            links = [a['href'] for a in soup.find_all('a', href=True)]
-            return {'body_text': body_text, 'headings': headings, 'links': links}
+        content = self.fetch_page_content()
+        if content:
+            links, headings = self.extract_links_and_headings(content)
+            soup = BeautifulSoup(content, 'lxml')
+            body_text = soup.get_text(separator=' ', strip=True)  # Extracts all the body text
+            return {
+                'links': links,
+                'headings': headings,
+                'body_text': body_text  # Make sure to add this to your JSON response
+            }
         else:
-            return {'error': 'Failed to fetch or parse the URL content'}
+            return None
 
 if __name__ == "__main__":
-    import sys
     if len(sys.argv) > 1:
         url = sys.argv[1]
         extractor = ContentExtractor(url)
-        extracted_data = extractor.extract_content()
-        print(extracted_data)
+        extracted_data = extractor.extract_content()  # Use the new method
+        if extracted_data:
+            print("Data extracted successfully:")
+            print(extracted_data)
     else:
         print("Please provide a URL as an argument.")
