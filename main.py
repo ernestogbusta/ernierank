@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, jsonify
 from sitemap_crawler import crawl_sitemap
 from content_extractor import ContentExtractor
 
@@ -10,12 +10,16 @@ def scrape_site():
     url = data.get('url')
     
     if not url:
-        return jsonify({"error": "No URL provided"}), 400
+        abort(400, description="No URL provided")
     
-    sitemap_urls = crawl_sitemap(url)
+    try:
+        sitemap_urls = crawl_sitemap(url)
+    except Exception as e:
+        # En caso de que ocurra un error en crawl_sitemap
+        abort(500, description=str(e))
     
     if not sitemap_urls:
-        return jsonify({"error": "Could not retrieve any URLs from the sitemap"}), 500
+        abort(500, description="Could not retrieve any URLs from the sitemap")
     
     results = []
     for site_url in sitemap_urls:
