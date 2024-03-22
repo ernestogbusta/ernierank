@@ -1,28 +1,28 @@
 import requests
-from urllib.parse import urljoin, urlparse
 from xml.etree import ElementTree
+import time
 
-def find_sitemap_url(domain_url):
-    """Find the sitemap URL by parsing the robots.txt file."""
-    parsed_url = urlparse(domain_url)
-    base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-    robots_txt_url = urljoin(base_url, "/robots.txt")
-    
+def fetch_robots_txt(domain_url):
+    """Fetch the robots.txt file from the given domain URL."""
     try:
-        response = requests.get(robots_txt_url)
+        response = session.get(f"{domain_url}/robots.txt")
         response.raise_for_status()
-        for line in response.text.splitlines():
-            if line.startswith("Sitemap:"):
-                return line.split(":", 1)[1].strip()
+        return response.text
     except requests.RequestException as e:
-        print(f"Error fetching the robots.txt: {e}")
-    
+        print(f"Error fetching robots.txt: {e}")
+        return None
+
+def extract_sitemap_url(robots_txt_content):
+    """Extract sitemap URL from the robots.txt content."""
+    for line in robots_txt_content.splitlines():
+        if line.startswith('Sitemap:'):
+            return line.split(': ')[1]
     return None
 
 def fetch_sitemap_content(sitemap_url):
     """Fetch the sitemap content from the given URL."""
     try:
-        response = requests.get(sitemap_url)
+        response = session.get(sitemap_url)
         response.raise_for_status()
         return response.text
     except requests.RequestException as e:
@@ -37,7 +37,7 @@ def extract_urls_from_sitemap(sitemap_content):
         root = ElementTree.fromstring(sitemap_content)
         for sitemap in root.findall('sitemap:sitemap', namespaces):
             loc = sitemap.find('sitemap:loc', namespaces).text
-            urls.extend(crawl_sitemap(loc))
+            urls.extend(extract_urls_from_sitemap(fetch_sitemap_content(loc)))
         for url in root.findall('sitemap:url', namespaces):
             loc = url.find('sitemap:loc', namespaces).text
             urls.append(loc)
@@ -45,23 +45,30 @@ def extract_urls_from_sitemap(sitemap_content):
         print(f"Error parsing the sitemap XML: {e}")
     return urls
 
-def crawl_sitemap(domain_url):
-    """Crawl the sitemap and return all found URLs."""
-    sitemap_url = find_sitemap_url(domain_url)
-    if sitemap_url:
-        sitemap_content = fetch_sitemap_content(sitemap_url)
-        if sitemap_content:
-            return extract_urls_from_sitemap(sitemap_content)
-        else:
-            print("Failed to fetch the sitemap content.")
-    else:
-        print("Sitemap URL not found in robots.txt.")
-    return []
-
 if __name__ == "__main__":
+    import sys
+    
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    })
+
     if len(sys.argv) > 1:
         domain_url = sys.argv[1]
-        urls = crawl_sitemap(domain_url)
-        print(f"Found URLs: {urls}")
+        robots_txt_content = fetch_robots_txt(domain_url)
+        if robots_txt_content:
+            sitemap_url = extract_sitemap_url(robots_txt_content)
+            if sitemap_url:
+                print(f"Sitemap found at: {sitemap_url}")
+                sitemap_content = fetch_sitemap_content(sitemap_url)
+                if sitemap_content:
+                    urls = extract_urls_from_sitemap(sitemap_content)
+                    print(f"URLs found in the sitemap: {urls}")
+                else:
+                    print("No URLs found in the sitemap.")
+            else:
+                print("No sitemap found in robots.txt.")
+        else:
+            print("Failed to fetch robots.txt.")
     else:
         print("Please provide a domain URL as an argument.")
