@@ -1,3 +1,4 @@
+from flask import abort
 from flask import Flask, request, jsonify
 from sitemap_crawler import crawl_sitemap
 from content_extractor import ContentExtractor
