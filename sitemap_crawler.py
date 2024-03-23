@@ -25,6 +25,15 @@ def crawl_sitemap(domain_url):
         for line in robots_txt_content.splitlines():
             if line.startswith('Sitemap:'):
                 return line.split(': ')[1]
+        # Intenta ubicaciones comunes de sitemap si no se encuentra en robots.txt
+        for common_sitemap_url in ['/sitemap.xml', '/sitemap_index.xml']:
+            try:
+                response = session.head(f"{domain_url}{common_sitemap_url}")
+                if response.status_code == 200 or (300 <= response.status_code < 400):
+                    # Retorna la URL final después de redirecciones
+                    return response.url
+            except requests.RequestException:
+                continue  # Intenta con la siguiente URL común si esta falla
         return None
 
     def fetch_sitemap_content(sitemap_url):
@@ -54,12 +63,14 @@ def crawl_sitemap(domain_url):
         return urls
 
     robots_txt_content = fetch_robots_txt()
-    if robots_txt_content:
-        sitemap_url = extract_sitemap_url(robots_txt_content)
-        if sitemap_url:
-            sitemap_content = fetch_sitemap_content(sitemap_url)
-            if sitemap_content:
-                return extract_urls_from_sitemap(sitemap_content)
+    sitemap_url = extract_sitemap_url(robots_txt_content) if robots_txt_content else None
+    if not sitemap_url:
+        print("Sitemap URL not found in robots.txt, trying common locations...")
+        sitemap_url = extract_sitemap_url("")  # Intentionally empty to trigger common location checks
+    if sitemap_url:
+        sitemap_content = fetch_sitemap_content(sitemap_url)
+        if sitemap_content:
+            return extract_urls_from_sitemap(sitemap_content)
     return []
 
 if __name__ == "__main__":
