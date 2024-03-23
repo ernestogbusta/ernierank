@@ -2,4 +2,4 @@ services:
   - name: web
     env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn main:app -b :$PORT
+    startCommand: gunicorn main:app -b :$PORT --timeout 120
