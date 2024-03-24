@@ -3,9 +3,10 @@ from bs4 import BeautifulSoup
 import spacy
 from collections import Counter
 
-nlp = spacy.load("en_core_web_lg")  # Considera usar un modelo más grande para un análisis más profundo
+# Asegúrate de haber descargado el modelo español adecuado
+nlp = spacy.load("es_core_news_md")
 
-class SEOContentAnalyzer:
+class ContentExtractor:
     def __init__(self, url):
         self.url = url
 
@@ -29,7 +30,7 @@ class SEOContentAnalyzer:
         keywords = [token.lemma_.lower() for token in doc if not token.is_stop and token.is_alpha]
         keyword_freq = Counter(keywords).most_common(20)
         
-        # Identificación de entidades para determinar topics
+        # Identificación de entidades para determinar temas
         entities = [entity.text for entity in doc.ents]
         entity_freq = Counter(entities).most_common(20)
         
@@ -58,10 +59,10 @@ class SEOContentAnalyzer:
 
 if __name__ == "__main__":
     url = "https://example.com"
-    analyzer = SEOContentAnalyzer(url)
-    html_content = analyzer.fetch_content()
+    extractor = ContentExtractor(url)
+    html_content = extractor.fetch_content()
     if html_content:
-        analysis_results = analyzer.analyze_content(html_content)
+        analysis_results = extractor.analyze_content(html_content)
         print(analysis_results)
     else:
         print("No se pudo analizar el contenido.")

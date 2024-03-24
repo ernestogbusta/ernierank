@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, abort
 from sitemap_crawler import crawl_sitemap
-from content_extractor import ContentExtractor
+from content_extractor import SEOContentAnalyzer  # Asegúrate de que este importe sea correcto
 
 app = Flask(__name__)
 
@@ -22,10 +22,10 @@ def scrape_site():
     
     results = []
     for site_url in sitemap_urls:
-        extractor = ContentExtractor(site_url)
-        content_data = extractor.extract_content()
-        if content_data:
-            results.append(content_data)
+        analyzer = SEOContentAnalyzer(site_url)  # Actualiza esta línea para usar la nueva clase
+        analysis_results = analyzer.analyze_content()  # Asegúrate de que este método exista y haga lo que esperas
+        if analysis_results:
+            results.append(analysis_results)
         else:
             results.append({"url": site_url, "error": "Failed to extract content"})
 
