@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, abort
 from sitemap_crawler import crawl_sitemap
-from content_extractor import SEOContentAnalyzer  # Corrige el nombre de la importación
+from content_extractor import SEOContentAnalyzer  # Asume que esta es la clase actualizada
 
 app = Flask(__name__)
 

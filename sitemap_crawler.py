@@ -8,29 +8,14 @@ session.headers.update({
 })
 
 def crawl_sitemap(domain_url):
-    def fetch_robots_txt():
-        try:
-            response = session.get(f"{domain_url}/robots.txt")
-            response.raise_for_status()
-            return response.text
-        except requests.RequestException as e:
-            print(f"Error fetching robots.txt: {e}")
-            return None
-
-    def extract_sitemap_url(robots_txt_content):
-        if robots_txt_content:
-            for line in robots_txt_content.splitlines():
-                if line.startswith('Sitemap:'):
-                    return line.split(': ')[1].strip()
-        return None
+    common_sitemap_urls = [f"{domain_url}/sitemap.xml", f"{domain_url}/sitemap_index.xml"]
 
     def fetch_sitemap_content(sitemap_url):
         try:
             response = session.get(sitemap_url)
             response.raise_for_status()
             return response.text
-        except requests.RequestException as e:
-            print(f"Error fetching the sitemap: {e}")
+        except requests.RequestException:
             return None
 
     def extract_urls_from_sitemap(sitemap_content):
@@ -44,23 +29,15 @@ def crawl_sitemap(domain_url):
             for url in root.findall('sitemap:url', namespaces):
                 loc = url.find('sitemap:loc', namespaces).text
                 urls.append(loc)
-        except ElementTree.ParseError as e:
-            print(f"Error parsing the sitemap XML: {e}")
+        except ElementTree.ParseError:
+            pass
         return urls
 
-    robots_txt_content = fetch_robots_txt()
-    sitemap_url = extract_sitemap_url(robots_txt_content)
-    if not sitemap_url:
-        common_sitemap_urls = [f"{domain_url}/sitemap.xml", f"{domain_url}/sitemap_index.xml"]
-        for url in common_sitemap_urls:
-            sitemap_url = url
-            if fetch_sitemap_content(sitemap_url):
-                break
-
-    if sitemap_url:
+    for sitemap_url in common_sitemap_urls:
         sitemap_content = fetch_sitemap_content(sitemap_url)
         if sitemap_content:
             return extract_urls_from_sitemap(sitemap_content)
+
     return []
 
 if __name__ == "__main__":
