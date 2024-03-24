@@ -1,5 +1,7 @@
 services:
   - name: web
     env: python
-    buildCommand: pip install -r requirements.txt
+    buildCommand: |
+      python3 -m pip install -r requirements.txt
+      python3 -m spacy download es_core_news_md
     startCommand: gunicorn main:app -b :$PORT --timeout 120
