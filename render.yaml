@@ -3,4 +3,5 @@ services:
     env: python
     buildCommand: |
       python3 -m pip install -r requirements.txt
+      python3 download_nltk_resources.py
     startCommand: gunicorn main:app -b :$PORT --timeout 180 -w 4

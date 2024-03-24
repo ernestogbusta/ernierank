@@ -1,4 +1,9 @@
 from flask import Flask, request, jsonify, abort
+import nltk
+
+# Descarga de los recursos de NLTK necesarios para TextBlob
+nltk.download('punkt')
+
 from sitemap_crawler import crawl_sitemap
 from content_extractor import SEOContentAnalyzer  # Asume que esta es la clase actualizada
 
@@ -21,10 +26,8 @@ def scrape_site():
             analyzer = SEOContentAnalyzer(site_url)
             analysis_results = analyzer.analyze_content()
             if analysis_results:
-                # Se agrega la URL a los resultados para identificar de qué página provienen
                 results.append({**analysis_results, 'url': site_url})
             else:
-                # Se maneja el caso en que la analítica falla para una URL específica
                 results.append({"url": site_url, "error": "Failed to analyze content"})
         
         return jsonify(results)
@@ -32,4 +35,4 @@ def scrape_site():
         abort(500, description=f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)  # Se especifica host y puerto para una mayor claridad
+    app.run(debug=True, host='0.0.0.0', port=5000)
