@@ -3,6 +3,7 @@ import nltk
 
 # Descarga de los recursos de NLTK necesarios para TextBlob
 nltk.download('punkt')
+nltk.download('averaged_perceptron_tagger')
 
 from sitemap_crawler import crawl_sitemap
 from content_extractor import SEOContentAnalyzer  # Asume que esta es la clase actualizada
