@@ -2,7 +2,6 @@ import requests
 from xml.etree import ElementTree
 import sys
 
-# Inicialización de una sesión de requests para reutilizar conexiones TCP.
 session = requests.Session()
 session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
@@ -15,7 +14,7 @@ def crawl_sitemap(domain_url):
         try:
             response = session.get(sitemap_url)
             response.raise_for_status()
-            return response.content  # Usar .content para evitar problemas de codificación
+            return response.content
         except requests.RequestException as e:
             print(f"Error al obtener el sitemap: {e}")
             return None
@@ -25,7 +24,6 @@ def crawl_sitemap(domain_url):
         urls = []
         try:
             root = ElementTree.fromstring(sitemap_content)
-            # Soporte tanto para sitemaps de URLs como índices de sitemaps.
             for sitemap in root.findall('sitemap:sitemap', namespaces) or root.findall('sitemap:url', namespaces):
                 loc = sitemap.find('sitemap:loc', namespaces).text
                 if 'sitemap' in loc:
@@ -49,10 +47,10 @@ if __name__ == "__main__":
         domain_url = sys.argv[1]
         urls = crawl_sitemap(domain_url)
         if urls:
-            print(f"URLs found in the sitemap: {len(urls)}")
+            print(f"URLs encontradas en el sitemap: {len(urls)}")
             for url in urls:
                 print(url)
         else:
-            print("No URLs found in the sitemap.")
+            print("No se encontraron URLs en el sitemap.")
     else:
-        print("Please provide a domain URL as an argument.")
+        print("Por favor, proporcione una URL de dominio como argumento.")

@@ -61,11 +61,3 @@ class SEOContentAnalyzer:
             'keywords': keyword_freq,
             'entities': entity_freq,
         }
-
-# Aceptar URL de entrada del usuario
-input_url = input("Por favor, introduce la URL que deseas analizar: ")
-analyzer = SEOContentAnalyzer(input_url)
-seo_report = analyzer.analyze_content()
-
-# Imprimir el reporte SEO
-print(seo_report)
