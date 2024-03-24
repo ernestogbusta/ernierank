@@ -3,5 +3,4 @@ services:
     env: python
     buildCommand: |
       python3 -m pip install -r requirements.txt
-      python3 -m spacy download es_core_news_md
-startCommand: gunicorn main:app -b :$PORT --timeout 180 -w 4
+    startCommand: gunicorn main:app -b :$PORT --timeout 180 -w 4

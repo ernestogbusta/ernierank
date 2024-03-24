@@ -2,6 +2,7 @@ import requests
 from xml.etree import ElementTree
 import sys
 
+# Inicialización de una sesión de requests para reutilizar conexiones TCP.
 session = requests.Session()
 session.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
@@ -14,8 +15,9 @@ def crawl_sitemap(domain_url):
         try:
             response = session.get(sitemap_url)
             response.raise_for_status()
-            return response.text
-        except requests.RequestException:
+            return response.content  # Usar .content para evitar problemas de codificación
+        except requests.RequestException as e:
+            print(f"Error al obtener el sitemap: {e}")
             return None
 
     def extract_urls_from_sitemap(sitemap_content):
@@ -23,22 +25,24 @@ def crawl_sitemap(domain_url):
         urls = []
         try:
             root = ElementTree.fromstring(sitemap_content)
-            for sitemap in root.findall('sitemap:sitemap', namespaces):
+            # Soporte tanto para sitemaps de URLs como índices de sitemaps.
+            for sitemap in root.findall('sitemap:sitemap', namespaces) or root.findall('sitemap:url', namespaces):
                 loc = sitemap.find('sitemap:loc', namespaces).text
-                urls.extend(extract_urls_from_sitemap(fetch_sitemap_content(loc)))
-            for url in root.findall('sitemap:url', namespaces):
-                loc = url.find('sitemap:loc', namespaces).text
-                urls.append(loc)
-        except ElementTree.ParseError:
-            pass
+                if 'sitemap' in loc:
+                    urls.extend(extract_urls_from_sitemap(fetch_sitemap_content(loc)))
+                else:
+                    urls.append(loc)
+        except ElementTree.ParseError as e:
+            print(f"Error al parsear el sitemap: {e}")
         return urls
 
+    urls_found = []
     for sitemap_url in common_sitemap_urls:
         sitemap_content = fetch_sitemap_content(sitemap_url)
         if sitemap_content:
-            return extract_urls_from_sitemap(sitemap_content)
+            urls_found.extend(extract_urls_from_sitemap(sitemap_content))
 
-    return []
+    return urls_found
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:

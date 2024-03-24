@@ -21,13 +21,15 @@ def scrape_site():
             analyzer = SEOContentAnalyzer(site_url)
             analysis_results = analyzer.analyze_content()
             if analysis_results:
+                # Se agrega la URL a los resultados para identificar de qué página provienen
                 results.append({**analysis_results, 'url': site_url})
             else:
+                # Se maneja el caso en que la analítica falla para una URL específica
                 results.append({"url": site_url, "error": "Failed to analyze content"})
         
         return jsonify(results)
     except Exception as e:
-        abort(500, description=str(e))
+        abort(500, description=f"An error occurred: {e}")
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)  # Se especifica host y puerto para una mayor claridad
