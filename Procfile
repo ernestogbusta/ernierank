@@ -1,1 +1,1 @@
-web: gunicorn main:app -b :$PORT --timeout 5000 --workers 500 --threads 64
+web: gunicorn main:app -b :$PORT --timeout 300 --workers 20 --threads 4
