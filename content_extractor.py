@@ -3,7 +3,7 @@ from bs4 import BeautifulSoup
 import spacy
 from collections import Counter
 
-nlp = spacy.load("./models/es_core_news_md")  # Asegúrate de que este modelo esté descargado.
+nlp = spacy.load("es_core_news_md")  # Asegúrate de que este modelo esté descargado.
 
 class SEOContentAnalyzer:
     def __init__(self, url):
