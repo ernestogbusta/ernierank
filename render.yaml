@@ -3,7 +3,7 @@ services:
     type: web_service
     env: python
     buildCommand: python3 -m pip install -r requirements.txt
-    startCommand: gunicorn main:app -b :$PORT --timeout 900 --workers 50 --threads 4
+    startCommand: gunicorn main:app -b :$PORT --timeout 1200 --workers 100 --threads 8
     plan: team
     healthCheckPath: /
     envVars:
