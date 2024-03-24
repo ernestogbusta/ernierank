@@ -1,6 +1,10 @@
 services:
   - name: web
+    type: web_service
     env: python
-    buildCommand: |
-      python3 -m pip install -r requirements.txt
-    startCommand: gunicorn main:app -b :$PORT --timeout 300 --workers 8 --threads 4
+    buildCommand: python3 -m pip install -r requirements.txt
+    startCommand: gunicorn main:app -b :$PORT --timeout 300 --workers 20 --threads 4
+    plan: team
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "true"
