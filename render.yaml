@@ -1,10 +1,20 @@
 services:
-  - name: web
-    type: web_service
-    env: python
-    buildCommand: python3 -m pip install -r requirements.txt
-    startCommand: gunicorn main:app -b :$PORT --timeout 1800 --workers 80 --threads 10
-    plan: team
-    envVars:
-      - key: PYTHONUNBUFFERED
-        value: "true"
+- type: web
+  name: ernierank-vd20
+  env: python
+  plan: starter
+  buildCommand: pip3 install -r requirements.txt
+  startCommand: gunicorn main:app -b :$PORT --worker-class gevent --workers 4 --timeout 120
+  envVars:
+    - key: FLASK_APP
+      value: main.py  # Asegúrate de reemplazar esto con el valor correcto si es diferente
+    - key: FLASK_ENV
+      value: production  # O ajusta esto según tu entorno de desarrollo
+    - key: VIRTUAL_ENV
+      value: /opt/render/project/src/.venv  # Ajusta este valor según la ruta de tu entorno virtual, si es necesario
+    - key: PORT
+      fromService:
+        type: web
+        name: ernierank-vd20
+        envVarKey: PORT
+  healthCheckPath: /
