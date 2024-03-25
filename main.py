@@ -2,20 +2,20 @@ from flask import Flask, request, jsonify, abort
 import os
 import logging
 import nltk
-from sitemap_crawler import crawl_sitemap
-from content_extractor import SEOContentAnalyzer
+from sitemap_crawler import crawl_sitemap  # Asume que esta función devuelve una lista de URLs
+from content_extractor import SEOContentAnalyzer  # Asume que esta clase tiene un método analyze_content() que devuelve un diccionario
 
 # Configuración inicial
 app = Flask(__name__)
 
 # Configurar el nivel de logging desde una variable de entorno
 log_level = os.environ.get('LOG_LEVEL', 'WARNING').upper()
-app.logger.setLevel(log_level)
+logging.basicConfig(level=log_level)
 
-# Descarga de los recursos de NLTK necesarios para TextBlob (considerar mover fuera de main.py en producción)
-nltk.download('punkt')
-nltk.download('averaged_perceptron_tagger')
-nltk.download('brown')
+# Descarga de los recursos de NLTK necesarios para TextBlob
+nltk.download('punkt', quiet=True)
+nltk.download('averaged_perceptron_tagger', quiet=True)
+nltk.download('brown', quiet=True)
 
 @app.errorhandler(400)
 def bad_request(error):
@@ -30,41 +30,27 @@ def scrape_site():
     data = request.json
     url = data.get('url')
     if not url:
-        abort(400, description="No se proporcionó URL")
+        abort(400, description="URL no proporcionada")
     
     try:
-        sitemap_urls = crawl_sitemap(url)
+        sitemap_urls = crawl_sitemap(url)  # Obtiene las URLs desde el sitemap del dominio dado
         if not sitemap_urls:
             abort(500, description="No se pudieron recuperar URLs del sitemap")
         
+        # Analiza el contenido de cada URL encontrada en el sitemap
         results = []
         for site_url in sitemap_urls:
             analyzer = SEOContentAnalyzer(site_url)
             analysis_results = analyzer.analyze_content()
             if analysis_results:
-                results.append({**analysis_results, 'url': site_url})
+                results.append({'url': site_url, **analysis_results})
             else:
                 results.append({"url": site_url, "error": "No se pudo analizar el contenido"})
         
         return jsonify(results)
     except Exception as e:
-        app.logger.error(f"Se produjo un error inesperado: {e}")
-        abort(500, description="Error interno del servidor")
-
-@app.route('/analisis-canibalizacion', methods=['POST'])
-def analisis_canibalizacion():
-    data = request.json
-    urls = data.get('urls')
-    if not urls:
-        abort(400, description="URLs no proporcionadas")
-    
-    try:
-        # Aquí implementarías tu lógica de análisis de canibalización
-        
-        return jsonify({"urls": urls})  # Modificar según la implementación real
-    except Exception as e:
-        app.logger.error(f"Se produjo un error en el análisis de canibalización: {e}")
+        logging.error(f"Se produjo un error inesperado: {e}")
         abort(500, description="Error interno del servidor")
 
 if __name__ == "__main__":
-    app.run()
+    app.run(debug=True)  # Cambia debug a False en producción
