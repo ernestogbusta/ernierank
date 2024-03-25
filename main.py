@@ -1,15 +1,29 @@
 from flask import Flask, request, jsonify, abort
+import os
+import logging
 import nltk
+from sitemap_crawler import crawl_sitemap
+from content_extractor import SEOContentAnalyzer
 
-# Descarga de los recursos de NLTK necesarios para TextBlob
+# Configuración inicial
+app = Flask(__name__)
+
+# Configurar el nivel de logging desde una variable de entorno
+log_level = os.environ.get('LOG_LEVEL', 'WARNING').upper()
+app.logger.setLevel(log_level)
+
+# Descarga de los recursos de NLTK necesarios para TextBlob (considerar mover fuera de main.py en producción)
 nltk.download('punkt')
 nltk.download('averaged_perceptron_tagger')
 nltk.download('brown')
 
-from sitemap_crawler import crawl_sitemap
-from content_extractor import SEOContentAnalyzer  # Asume que esta es la clase actualizada
+@app.errorhandler(400)
+def bad_request(error):
+    return jsonify(error=str(error)), 400
 
-app = Flask(__name__)
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify(error=str(error)), 500
 
 @app.route('/scrape', methods=['POST'])
 def scrape_site():
@@ -34,25 +48,23 @@ def scrape_site():
         
         return jsonify(results)
     except Exception as e:
-        abort(500, description=f"Se produjo un error: {e}")
+        app.logger.error(f"Se produjo un error inesperado: {e}")
+        abort(500, description="Error interno del servidor")
 
 @app.route('/analisis-canibalizacion', methods=['POST'])
 def analisis_canibalizacion():
     data = request.json
-    url = data.get('url')
-    if not url:
-        abort(400, description="URL no proporcionada")
+    urls = data.get('urls')
+    if not urls:
+        abort(400, description="URLs no proporcionadas")
     
     try:
-        sitemap_urls = crawl_sitemap(url)
-        if not sitemap_urls:
-            abort(500, description="No se pudieron recuperar URLs del sitemap")
+        # Aquí implementarías tu lógica de análisis de canibalización
         
-        # Implementa aquí la lógica específica del análisis de canibalización SEO
-        
-        return jsonify({"urls": sitemap_urls})
+        return jsonify({"urls": urls})  # Modificar según la implementación real
     except Exception as e:
-        abort(500, description=f"Se produjo un error: {e}")
+        app.logger.error(f"Se produjo un error en el análisis de canibalización: {e}")
+        abort(500, description="Error interno del servidor")
 
 if __name__ == "__main__":
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run()

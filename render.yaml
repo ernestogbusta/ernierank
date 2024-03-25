@@ -5,7 +5,6 @@ services:
     buildCommand: python3 -m pip install -r requirements.txt
     startCommand: gunicorn main:app -b :$PORT --timeout 1800 --workers 80 --threads 10
     plan: team
-    healthCheckPath: /
     envVars:
       - key: PYTHONUNBUFFERED
         value: "true"
