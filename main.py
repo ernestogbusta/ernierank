@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify, abort
 import os
 import logging
 import nltk
-# Importa la clase SitemapExtractor en lugar de una función
 from sitemap_crawler import SitemapExtractor
 from content_extractor import SEOContentAnalyzer
 
@@ -29,24 +28,30 @@ def scrape_site():
     if not url:
         abort(400, description="URL no proporcionada")
     
-    # Crea una instancia de SitemapExtractor con la URL del dominio
-    sitemap_extractor = SitemapExtractor(url)
-    # Llama al método crawl_sitemap sobre la instancia
-    sitemap_urls = sitemap_extractor.crawl_sitemap()
-    if not sitemap_urls:
-        abort(500, description="No se pudieron recuperar URLs del sitemap")
-    
-    results = []
-    for site_url in sitemap_urls:
-        analyzer = SEOContentAnalyzer(site_url)
-        content_analysis = analyzer.analyze_content()
-        if content_analysis:
-            result = {'url': site_url, **content_analysis}
-        else:
-            result = {'url': site_url, 'error': 'No se pudo analizar el contenido'}
-        results.append(result)
-    
-    return jsonify(results)
+    try:
+        sitemap_extractor = SitemapExtractor(url)
+        sitemap_urls = sitemap_extractor.crawl_sitemap()
+        if not sitemap_urls:
+            abort(500, description="No se pudieron recuperar URLs del sitemap")
+        
+        results = []
+        for site_url in sitemap_urls:
+            try:
+                analyzer = SEOContentAnalyzer(site_url)
+                content_analysis = analyzer.analyze_content()
+                if content_analysis:
+                    result = {'url': site_url, **content_analysis}
+                else:
+                    result = {'url': site_url, 'error': 'No se pudo analizar el contenido'}
+                results.append(result)
+            except Exception as e:
+                app.logger.error(f"Error al analizar {site_url}: {e}")
+                results.append({'url': site_url, 'error': 'Error durante el análisis de contenido'})
+        
+        return jsonify(results)
+    except Exception as e:
+        app.logger.error(f"Error general al procesar la solicitud: {e}")
+        abort(500, description="Error interno del servidor")
 
 if __name__ == "__main__":
     app.run(debug=True)
