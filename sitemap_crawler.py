@@ -37,12 +37,3 @@ class SitemapExtractor:
             if sitemap_content:
                 urls_found.extend(self.extract_urls_from_sitemap(sitemap_content))
         return urls_found
-
-# Example usage in a separate script or application entry point:
-if __name__ == "__main__":
-    user_provided_domain = input("Please enter the domain URL to crawl: ").strip()
-    extractor = SitemapExtractor(user_provided_domain)
-    urls = extractor.crawl_sitemap()
-    print(f"Found {len(urls)} URLs in the sitemap of {user_provided_domain}")
-    for url in urls:
-        print(url)

@@ -1,13 +1,9 @@
-from locust import HttpUser, between, task
+from locust import HttpUser, task, between
 
 class WebsiteUser(HttpUser):
-    wait_time = between(1, 5)
+    wait_time = between(1, 2)
 
     @task
-    def load_main_page(self):
-        self.client.get("/")
-
-    @task(3)
     def scrape_site(self):
-        # Asegúrate de reemplazar "https://www.example.com" con la URL que deseas rastrear y analizar
-        self.client.post("/scrape", json={"url": "https://www.aulacm.com"})
+        # Asegúrate de cambiar la URL de prueba por la que desees usar
+        self.client.post("/scrape", json={"url": "https://www.example.com"})
