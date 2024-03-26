@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify
+import json
 from sitemap_crawler import SitemapExtractor
 from content_extractor import SEOContentAnalyzer
 
@@ -6,27 +7,31 @@ app = Flask(__name__)
 
 @app.route('/scrape', methods=['POST'])
 def scrape_site():
-    data = request.json
-    if not data or 'url' not in data:
-        return jsonify({"error": "No URL provided"}), 400
-
-    domain_url = data['url']
-    sitemap_extractor = SitemapExtractor(domain_url)
-    urls = sitemap_extractor.crawl_sitemap()
-
-    if not urls:
+    # Obtén la URL del cuerpo de la solicitud
+    data = request.get_json()
+    url = data.get('url')
+    
+    if not url:
+        return jsonify({"error": "URL not provided"}), 400
+    
+    # Inicia el extractor de sitemap con la URL proporcionada
+    sitemap_extractor = SitemapExtractor(url)
+    urls_found = sitemap_extractor.crawl_sitemap()
+    
+    if not urls_found:
         return jsonify({"error": "No URLs found in the sitemap"}), 404
-
+    
+    # Analiza el contenido de cada URL encontrada
     results = []
-    for url in urls:
-        analyzer = SEOContentAnalyzer(url)
-        content_data = analyzer.analyze_content()
-        if content_data:
-            results.append({"url": url, "data": content_data})
+    for site_url in urls_found:
+        analyzer = SEOContentAnalyzer(site_url)
+        content_analysis = analyzer.analyze_content()
+        if content_analysis:
+            results.append({"url": site_url, **content_analysis})
         else:
-            results.append({"url": url, "error": "Failed to analyze content"})
-
-    return jsonify(results), 200
+            results.append({"url": site_url, "error": "Failed to analyze content"})
+    
+    return jsonify(results)
 
 if __name__ == '__main__':
     app.run(debug=True)
