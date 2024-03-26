@@ -1,4 +1,4 @@
-altgraph @ file:///AppleInternal/Library/BuildRoots/860631e9-c1c5-11ee-98ee-b6ef2fd8d87b/Library/Caches/com.apple.xbs/Sources/python3/altgraph-0.17.2-py2.py3-none-any.whl
+altgraph==0.17.4
 annotated-types==0.6.0
 appdirs==1.4.4
 attrs==23.2.0
