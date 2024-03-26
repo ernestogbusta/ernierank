@@ -1,18 +1,20 @@
 services:
-- type: web
-  name: ernierank-vd20
-  env: python
-  plan: performance
-  buildCommand: pip3 install -r requirements.txt
-  startCommand: gunicorn -w 16 -k gevent -t 120 main:app -b :$PORT
-  envVars:
-    - key: FLASK_APP
-      value: main.py
-    - key: FLASK_ENV
-      value: production
-    - key: WORKERS
-      value: 16
-    - key: WORKER_CLASS
-      value: gevent
-    - key: TIMEOUT
-      value: 120
+  - type: web
+    name: ernierank
+    env: python
+    plan: starter # Asegúrate de ajustar esto según el plan que estés utilizando
+    buildCommand: pip3 install -r requirements.txt
+    startCommand: gunicorn main:app -b :$PORT --worker-class gevent --workers 4 --timeout 31536000
+    envVars:
+      - key: FLASK_APP
+        value: main.py
+      - key: FLASK_ENV
+        value: production
+      - key: VIRTUAL_ENV
+        value: /opt/render/project/src/.venv # Ajusta este valor si tu estructura de directorios es diferente
+      - key: PORT
+        fromService:
+          type: web
+          name: ernierank
+          envVarKey: PORT
+    healthCheckPath: /
