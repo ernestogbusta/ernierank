@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-import json
 from sitemap_crawler import SitemapExtractor
 from content_extractor import SEOContentAnalyzer
 
