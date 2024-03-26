@@ -32,5 +32,9 @@ def scrape_site():
     
     return jsonify(results)
 
+@app.route('/test', methods=['GET'])
+def test():
+    return jsonify({"message": "Test endpoint is working!"})
+
 if __name__ == '__main__':
     app.run(debug=True)
