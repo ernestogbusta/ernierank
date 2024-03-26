@@ -12,13 +12,13 @@ from content_extractor import SEOContentAnalyzer
 class TestSitemapContentExtraction(unittest.TestCase):
     def test_sitemap_extraction(self):
         # Reemplaza "https://example.com" con la URL real que quieras probar
-        extractor = SitemapExtractor("https://ernestogbustamante.com/")
+        extractor = SitemapExtractor("https://aulacm.com/")
         urls = extractor.crawl_sitemap()
         self.assertGreater(len(urls), 0, "Should find at least one URL in the sitemap.")
 
     def test_home_content_extraction(self):
         # Reemplaza "https://example.com" con la URL real que quieras probar
-        analyzer = SEOContentAnalyzer("https://ernestogbustamante.com/")
+        analyzer = SEOContentAnalyzer("https://aulacm.com/")
         content = analyzer.analyze_content()
         self.assertIsNotNone(content, "The extracted content should not be None.")
         # Asegúrate de que el título extraído no esté vacío como una prueba básica

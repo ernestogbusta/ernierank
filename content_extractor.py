@@ -1,5 +1,6 @@
+# content_extractor.py
+
 import requests
-from bs4 import Comment
 from bs4 import BeautifulSoup
 from textblob import TextBlob
 from collections import Counter
@@ -9,6 +10,7 @@ class SEOContentAnalyzer:
         self.url = url
 
     def fetch_content(self):
+        """Try to fetch the content from specified URL and handle connection errors."""
         try:
             response = requests.get(self.url, headers={'User-Agent': 'Mozilla/5.0'})
             response.raise_for_status()
@@ -18,21 +20,23 @@ class SEOContentAnalyzer:
             return None
 
     def analyze_content(self):
+        """Analyze the HTML content of a webpage for SEO, excluding comments."""
         html_content = self.fetch_content()
         if not html_content:
             return None
 
         soup = BeautifulSoup(html_content, 'html.parser')
-        # Elimination of comments and comment sections
-        for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
-            comment.extract()
 
+        # Extracting key elements for SEO
         title = soup.title.text.strip() if soup.title else ''
-        meta_description = soup.find("meta", attrs={"name": "description"})["content"].strip() if soup.find("meta", attrs={"name": "description"}) else ''
-        canonical_link = soup.find("link", rel="canonical")["href"] if soup.find("link", rel="canonical") else ''
+        meta_description = soup.find("meta", attrs={"name": "description"})
+        meta_description_content = meta_description["content"].strip() if meta_description and "content" in meta_description.attrs else ''
+        canonical_link = soup.find("link", rel="canonical")
+        canonical_href = canonical_link['href'] if canonical_link else ''
 
-        paragraphs = ' '.join(p.text for p in soup.find_all('p'))
-        blob = TextBlob(paragraphs)
+        # Preparing and analyzing body text for keyword and entity extraction
+        body_text = ' '.join(p.text for p in soup.find_all('p'))
+        blob = TextBlob(body_text)
 
         keywords = [word for word, tag in blob.tags if tag.startswith('N')]
         keyword_freq = Counter(keywords).most_common(20)
@@ -41,8 +45,8 @@ class SEOContentAnalyzer:
 
         return {
             'title': title,
-            'meta_description': meta_description,
-            'canonical_link': canonical_link,
+            'meta_description': meta_description_content,
+            'canonical_link': canonical_href,
             'keywords': [keyword for keyword, _ in keyword_freq],
             'entities': [entity for entity, _ in entity_freq],
         }
