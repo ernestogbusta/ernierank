@@ -2,16 +2,16 @@ services:
   - type: web
     name: ernierank-vd20
     env: python
-    plan: starter
+    plan: team # Asegúrate de cambiar esto si cambias de plan
     buildCommand: pip3 install -r requirements.txt
-    startCommand: gunicorn main:app -b :$PORT --worker-class gevent --workers 4 --timeout 180
+    startCommand: gunicorn main:app -b :$PORT --worker-class gevent --workers 5 --worker-connections 1000 --timeout 30
     envVars:
       - key: FLASK_APP
-        value: main.py  # Confirma que este es el nombre correcto de tu archivo Flask principal
+        value: main.py
       - key: FLASK_ENV
-        value: production  # Asegúrate de que este es el entorno adecuado para tu despliegue
+        value: production
       - key: VIRTUAL_ENV
-        value: /opt/render/project/src/.venv  # Ajusta este valor si tu entorno virtual está en una ruta diferente
+        value: /opt/render/project/src/.venv
       - key: PORT
         fromService:
           type: web
