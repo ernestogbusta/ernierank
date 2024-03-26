@@ -1,8 +1,10 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from sitemap_crawler import SitemapExtractor
 from content_extractor import SEOContentAnalyzer
 
 app = Flask(__name__)
+CORS(app)
 
 @app.route('/scrape', methods=['POST'])
 def scrape_site():
