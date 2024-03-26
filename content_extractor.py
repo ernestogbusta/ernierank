@@ -8,6 +8,7 @@ class SEOContentAnalyzer:
         self.url = url
 
     def fetch_content(self):
+        """Fetches the content of the URL."""
         try:
             response = requests.get(self.url, headers={'User-Agent': 'Mozilla/5.0'})
             response.raise_for_status()
@@ -17,11 +18,13 @@ class SEOContentAnalyzer:
             return None
 
     def analyze_content(self):
+        """Analyzes the HTML content for SEO elements."""
         html_content = self.fetch_content()
         if not html_content:
             return None
 
         soup = BeautifulSoup(html_content, 'html.parser')
+        # Removal of comment sections
         for comment in soup.find_all(string=lambda text: isinstance(text, Comment)):
             comment.extract()
 
@@ -29,6 +32,7 @@ class SEOContentAnalyzer:
         meta_description = soup.find("meta", attrs={"name": "description"})["content"].strip() if soup.find("meta", attrs={"name": "description"}) else ''
         canonical_link = soup.find("link", rel="canonical")["href"] if soup.find("link", rel="canonical") else ''
 
+        # Simplification of content analysis
         paragraphs = ' '.join(p.text for p in soup.find_all('p'))
         blob = TextBlob(paragraphs)
 

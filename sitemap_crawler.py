@@ -5,9 +5,7 @@ class SitemapExtractor:
     def __init__(self, domain_url):
         self.domain_url = domain_url
         self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (compatible; YourBotName/1.0; +http://www.yourwebsite.com/bot.html)'
-        })
+        self.session.headers.update({'User-Agent': 'Mozilla/5.0'})
 
     def fetch_sitemap_content(self, sitemap_url):
         try:
