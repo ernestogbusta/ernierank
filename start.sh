@@ -1,5 +1,5 @@
 #!/bin/bash
-# Descarga los recursos de NLTK necesarios
-python download_nltk_resources.py
-# Inicia la aplicación Flask con Gunicorn
+python -m nltk.downloader punkt
+python -m nltk.downloader averaged_perceptron_tagger
+python -m nltk.downloader brown
 gunicorn main:app -b :10000
