@@ -1,7 +1,5 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import nltk
-nltk.download('punkt')
 from sitemap_crawler import SitemapExtractor
 from content_extractor import SEOContentAnalyzer
 
