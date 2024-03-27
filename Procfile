@@ -1,1 +1,1 @@
-web: gunicorn main:app -b :$PORT --worker-class gevent --workers 4 --timeout 31536000
+web: ./start.sh
