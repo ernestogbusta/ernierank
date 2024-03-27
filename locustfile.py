@@ -6,4 +6,4 @@ class WebsiteUser(HttpUser):
     @task
     def scrape_site(self):
         # Asegúrate de cambiar la URL de prueba por la que desees usar
-        self.client.post("/scrape", json={"url": "https://www.example.com"})
+        self.client.post("/scrape", json={"url": "https://www.aulacm.com"})
