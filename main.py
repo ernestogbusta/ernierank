@@ -1,24 +1,27 @@
-from aiohttp import web
+from flask import Flask, request, jsonify
 from content_extractor import SEOContentAnalyzer
 from sitemap_crawler import SitemapExtractor
 
-async def handle_content_analysis(request):
-    data = await request.json()
-    url = data.get('url')
-    analyzer = SEOContentAnalyzer(url)
-    content = await analyzer.analyze_content()
-    return web.json_response(content)
+app = Flask(__name__)
 
-async def handle_sitemap_crawling(request):
-    params = request.rel_url.query
-    url = params.get('sitemap_url')
-    extractor = SitemapExtractor(url)
-    urls = await extractor.crawl_sitemap()
-    return web.json_response({"urls": urls})
+@app.route('/scrape', methods=['POST'])
+async def scrape():
+    data = request.json
+    url = data['url']
 
-app = web.Application()
-app.add_routes([web.post('/analyze', handle_content_analysis),
-                web.get('/crawl-sitemap', handle_sitemap_crawling)])
+    # Inicializa tus clases con el URL
+    content_analyzer = SEOContentAnalyzer(url)
+    sitemap_extractor = SitemapExtractor(url)
+
+    # Extrae y analiza el contenido
+    content_analysis = await content_analyzer.analyze_content()
+    sitemap_urls = await sitemap_extractor.crawl_sitemap()
+
+    # Devuelve los resultados
+    return jsonify({
+        'content_analysis': content_analysis,
+        'sitemap_urls': sitemap_urls
+    })
 
 if __name__ == '__main__':
-    web.run_app(app, port=8080)
+    app.run(debug=True)
