@@ -1,42 +1,24 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from sitemap_crawler import SitemapExtractor
+from aiohttp import web
 from content_extractor import SEOContentAnalyzer
+from sitemap_crawler import SitemapExtractor
 
-app = Flask(__name__)
-CORS(app)
-
-@app.route('/scrape', methods=['POST'])
-def scrape_site():
-    # Obtén la URL del cuerpo de la solicitud
-    data = request.get_json()
+async def handle_content_analysis(request):
+    data = await request.json()
     url = data.get('url')
-    
-    if not url:
-        return jsonify({"error": "URL not provided"}), 400
-    
-    # Inicia el extractor de sitemap con la URL proporcionada
-    sitemap_extractor = SitemapExtractor(url)
-    urls_found = sitemap_extractor.crawl_sitemap()
-    
-    if not urls_found:
-        return jsonify({"error": "No URLs found in the sitemap"}), 404
-    
-    # Analiza el contenido de cada URL encontrada
-    results = []
-    for site_url in urls_found:
-        analyzer = SEOContentAnalyzer(site_url)
-        content_analysis = analyzer.analyze_content()
-        if content_analysis:
-            results.append({"url": site_url, **content_analysis})
-        else:
-            results.append({"url": site_url, "error": "Failed to analyze content"})
-    
-    return jsonify(results)
+    analyzer = SEOContentAnalyzer(url)
+    content = await analyzer.analyze_content()
+    return web.json_response(content)
 
-@app.route('/test', methods=['GET'])
-def test():
-    return jsonify({"message": "Test endpoint is working!"})
+async def handle_sitemap_crawling(request):
+    params = request.rel_url.query
+    url = params.get('sitemap_url')
+    extractor = SitemapExtractor(url)
+    urls = await extractor.crawl_sitemap()
+    return web.json_response({"urls": urls})
+
+app = web.Application()
+app.add_routes([web.post('/analyze', handle_content_analysis),
+                web.get('/crawl-sitemap', handle_sitemap_crawling)])
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    web.run_app(app, port=8080)

@@ -6,3 +6,5 @@ locust==2.24.1
 nltk==3.8.1
 requests==2.31.0
 textblob==0.18.0
+aiohttp==3.9.3
+

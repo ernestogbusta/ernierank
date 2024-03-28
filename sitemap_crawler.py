@@ -1,50 +1,49 @@
-import requests
-from xml.etree import ElementTree
+import aiohttp
+import xml.etree.ElementTree as ET
 
 class SitemapExtractor:
-    def __init__(self, domain_url):
-        self.domain_url = domain_url
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0'
-        })
+    def __init__(self, sitemap_url):
+        self.sitemap_url = sitemap_url
 
-    def fetch_sitemap_content(self, sitemap_url):
-        try:
-            response = self.session.get(sitemap_url)
-            response.raise_for_status()
-            return response.content
-        except requests.RequestException as e:
-            print(f"Error fetching sitemap from {sitemap_url}: {e}")
-            return None
+    async def fetch_sitemap(self, url):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    return await response.text()
+                else:
+                    print(f"Invalid response {response.status} for {url}")
+                    return None
 
-    def extract_urls_from_sitemap(self, sitemap_content):
+    async def parse_sitemap(self, content):
         urls = []
         try:
-            root = ElementTree.fromstring(sitemap_content)
-            sitemap_tags = root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}sitemap')
-            url_tags = root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}url')
-            for sitemap in sitemap_tags:
-                loc = sitemap.find('{http://www.sitemaps.org/schemas/sitemap/0.9}loc').text
-                nested_content = self.fetch_sitemap_content(loc)
-                urls.extend(self.extract_urls_from_sitemap(nested_content))
-            for url in url_tags:
-                loc = url.find('{http://www.sitemaps.org/schemas/sitemap/0.9}loc').text
-                urls.append(loc)
-        except ElementTree.ParseError as e:
-            print(f"Error parsing sitemap: {e}")
+            root = ET.fromstring(content)
+            namespace = {'sitemap': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+            for sitemap in root.findall('sitemap:sitemap', namespace):
+                loc = sitemap.find('sitemap:loc', namespace)
+                if loc is not None:
+                    urls.append(loc.text)
+            for url in root.findall('sitemap:url', namespace):
+                loc = url.find('sitemap:loc', namespace)
+                if loc is not None:
+                    urls.append(loc.text)
+        except ET.ParseError as e:
+            print(f"Error parsing sitemap content: {e}")
         return urls
 
-    def crawl_sitemap(self):
-        urls_found = []
-        sitemap_urls = [
-            f"{self.domain_url}/sitemap.xml",
-            f"{self.domain_url}/sitemap_index.xml",
-            f"{self.domain_url}/wp-sitemap.xml"  # Agregado soporte para WordPress
-        ]
-        for sitemap_url in sitemap_urls:
-            sitemap_content = self.fetch_sitemap_content(sitemap_url)
-            if sitemap_content:
-                urls_found.extend(self.extract_urls_from_sitemap(sitemap_content))
-                break  # Detiene después de encontrar el primer sitemap válido
-        return urls_found
+    async def crawl_sitemap(self):
+        content = await self.fetch_sitemap(self.sitemap_url)
+        if content is None:
+            return []
+
+        # Check if it's a sitemap index
+        if "<sitemapindex" in content:
+            urls = []
+            sitemap_urls = await self.parse_sitemap(content)
+            for sitemap_url in sitemap_urls:
+                sitemap_content = await self.fetch_sitemap(sitemap_url)
+                if sitemap_content:
+                    urls.extend(await self.parse_sitemap(sitemap_content))
+            return urls
+        else:
+            return await self.parse_sitemap(content)
