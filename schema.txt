@@ -1,0 +1,144 @@
+openapi: 3.0.0
+info:
+  title: ErnieRank API
+  description: API para optimización avanzada del SEO de sitios web, incluyendo procesamiento en lotes de URLs y análisis SEO detallado de cada página con estado HTTP 200, además de análisis de rendimiento web (WPO) utilizando Lighthouse.
+  version: "1.0"
+servers:
+  - url: https://ernierank-vd20.onrender.com
+
+paths:
+  /process_urls_in_batches:
+    post:
+      summary: Procesa URLs en lotes desde el sitemap del sitio web proporcionado, excluyendo redirecciones y no-HTML.
+      operationId: processUrlsInBatches
+      tags:
+        - Batch Processing
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                domain:
+                  type: string
+                  description: Dominio del sitio web para analizar, incluyendo protocolo (http o https).
+                  example: "https://example.com"
+                start:
+                  type: integer
+                  description: El índice de inicio para el lote de URLs a procesar.
+                  example: 0
+                batch_size:
+                  type: integer
+                  description: El número de URLs a procesar en un solo lote.
+                  example: 100
+      responses:
+        '200':
+          description: Devuelve un listado completo de todas las URLs válidas procesadas en este lote y sus datos SEO, junto con información para el próximo lote.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UrlAnalysisBatchResponse'
+        '400':
+          description: Error en la solicitud, por ejemplo, dominio no proporcionado o error en el formato de entrada.
+        '404':
+          description: No se encontraron URLs válidas o el sitemap no pudo ser procesado.
+
+  /analyze_wpo:
+    post:
+      summary: Realiza un análisis de optimización de rendimiento web (WPO) de la URL especificada usando Lighthouse.
+      operationId: analyzeWpo
+      tags:
+        - Performance Optimization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  description: URL completa del sitio web para analizar su rendimiento.
+                  example: "https://example.com"
+      responses:
+        '200':
+          description: Devuelve los resultados del análisis de rendimiento, incluyendo puntuaciones y métricas detalladas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WpoAnalysisResponse'
+        '400':
+          description: Error en la solicitud, por ejemplo, URL no proporcionada o error en el formato de entrada.
+        '500':
+          description: Error al ejecutar Lighthouse o problemas al obtener resultados del análisis.
+
+components:
+  schemas:
+    SeoAnalysisResponse:
+      type: object
+      properties:
+        url:
+          type: string
+          description: URL procesada.
+        title:
+          type: string
+          description: Título de la página web.
+        meta_description:
+          type: string
+          description: Descripción meta de la página web.
+        slug:
+          type: string
+          description: Fragmento simplificado derivado de la ruta de la URL.
+        h1_tags:
+          type: array
+          items:
+            type: string
+          description: Lista de textos encontrados en etiquetas H1.
+        h2_tags:
+          type: array
+          items:
+            type: string
+          description: Lista de textos encontrados en las primeras tres etiquetas H2.
+        main_keyword:
+          type: string
+          description: Palabra clave principal identificada a partir del contenido de la página.
+        secondary_keywords:
+          type: array
+          items:
+            type: string
+          description: Palabras clave secundarias identificadas en base a relevancia y similitud semántica.
+        semantic_search_intent:
+          type: string
+          description: Clasificación de la intención de búsqueda basada en el análisis de contenido y contexto.
+
+    UrlAnalysisBatchResponse:
+      type: object
+      properties:
+        processed_urls:
+          type: array
+          items:
+            $ref: '#/components/schemas/SeoAnalysisResponse'
+          description: Lista de resultados del análisis SEO para las URLs procesadas en el lote actual.
+        more_batches:
+          type: boolean
+          description: Indica si hay más lotes disponibles para procesar.
+        next_batch_start:
+          type: integer
+          description: Índice en el cual el próximo lote de procesamiento de URLs debería comenzar.
+
+    WpoAnalysisResponse:
+      type: object
+      properties:
+        url:
+          type: string
+          description: URL analizada.
+        performance_score:
+          type: number
+          format: double
+          description: Puntuación de rendimiento de la página según Lighthouse.
+        details:
+          type: array
+          items:
+            type: object
+          description: Detalles específicos de los audits de rendimiento realizados por Lighthouse.
