@@ -541,7 +541,7 @@ def test_api():
 
 
 
-####################
+#################### ENLACES INTERNOS
 
 @app.post("/internal_links_analysis")
 async def internal_links_analysis(request: Request):
@@ -653,7 +653,7 @@ async def fetch_page_content(client: httpx.AsyncClient, url: str) -> str:
         print(f"Error fetching content for URL {url}: {e}")
         return ""
 
-        @app.post("/analyze_duplicate_content")
+@app.post("/analyze_duplicate_content")
 async def analyze_duplicate_content(request: BatchRequest):
     try:
         urls = await fetch_sitemap_urls(request.domain)
