@@ -21,7 +21,7 @@ from difflib import SequenceMatcher
 
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int = 100  # valor por defecto
+    batch_size: int = 50  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 load_dotenv()
@@ -481,7 +481,7 @@ async def process_all_batches_endpoint(request: Request):
 
 async def process_all_batches(domain):
     start = 0
-    batch_size = 100
+    batch_size = 50
     more_batches = True
     results = []
 
@@ -710,7 +710,7 @@ async def analyze_thin_content_endpoint(request: BatchRequest):
 #################### 404
 
 @app.post("/handle_404_urls")
-async def handle_404_urls(request: Request, domain: str, batch_size: Optional[int] = 100):
+async def handle_404_urls(request: Request, domain: str, batch_size: Optional[int] = 50):
     redis_client: Redis = request.state.redis
     try:
         print(f"Handling 404 URLs for domain: {domain}")
