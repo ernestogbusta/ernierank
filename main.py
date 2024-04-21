@@ -55,6 +55,14 @@ async def root(request: Request):
     value = await redis_client.get("key")
     return {"hello": "world", "key": value}
 
+@app.get("/preheat")
+async def preheat():
+    await app.state.redis.get("test_key")
+
+    await app.state.client.get("http://localhost:10000/")  
+
+    return {"status": "preheated"}
+
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
