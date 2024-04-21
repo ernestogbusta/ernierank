@@ -37,7 +37,7 @@ class RedisMiddleware(BaseHTTPMiddleware):
 # Eventos de inicio y cierre para configurar y cerrar Redis
 @app.on_event("startup")
 async def startup_event():
-    timeout = Timeout(60.0, read=300.0)  # 15 segundos para conectar, 180 segundos para leer
+    timeout = Timeout(60.0, read=300.0)  
     app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
     app.state.client = httpx.AsyncClient(timeout=timeout)
 
