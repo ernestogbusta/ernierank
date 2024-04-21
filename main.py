@@ -37,7 +37,7 @@ class RedisMiddleware(BaseHTTPMiddleware):
 # Eventos de inicio y cierre para configurar y cerrar Redis
 @app.on_event("startup")
 async def startup_event():
-    timeout = Timeout(30.0, read=300.0)  # 15 segundos para conectar, 180 segundos para leer
+    timeout = Timeout(60.0, read=300.0)  # 15 segundos para conectar, 180 segundos para leer
     app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
     app.state.client = httpx.AsyncClient(timeout=timeout)
 
@@ -98,7 +98,7 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout(30.0, read=300.0)):
+async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout(60.0, read=300.0)):
     redis_key = f"sitemap:{url}"
     cached_sitemap = await redis_client.get(redis_key)
     if cached_sitemap:
@@ -183,7 +183,7 @@ async def fetch_url(client, url, timeout_config, max_redirects=5):
 async def test_redirect():
     client = app.state.client  # Utiliza el cliente HTTP almacenado en el estado de la app
     url = 'http://example.com/some-redirect-url'
-    timeout_config = Timeout(30.0, read=300.0)  # Configura los tiempos de espera apropiadamente
+    timeout_config = Timeout(60.0, read=300.0)  # Configura los tiempos de espera apropiadamente
 
     try:
         final_url = await fetch_url(client, url, timeout_config)
