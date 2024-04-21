@@ -57,11 +57,31 @@ async def root(request: Request):
 
 @app.get("/preheat")
 async def preheat():
-    await app.state.redis.get("test_key")
+    logging.info("Preheat process started.")
+    try:
+        # Realiza una conexión de prueba a Redis
+        logging.info("Testing Redis connection...")
+        app.state.redis.set("test_key", "test_value")
+        if app.state.redis.get("test_key") == "test_value":
+            logging.info("Redis connection OK.")
+        else:
+            logging.error("Redis connection FAILED.")
+            raise Exception("Redis test failed")
 
-    await app.state.client.get("http://localhost:10000/")  
+        # Realiza una solicitud HTTP de prueba a un endpoint interno
+        logging.info("Testing HTTP client by requesting an internal endpoint...")
+        response = await app.state.client.get("http://localhost:10000/test-endpoint")
+        if response.status_code == 200:
+            logging.info("Internal HTTP client test OK.")
+        else:
+            logging.error(f"Internal HTTP client test FAILED. Status code: {response.status_code}")
+            raise Exception("HTTP client test failed")
 
-    return {"status": "preheated"}
+        logging.info("Preheat process completed successfully.")
+        return {"status": "preheated"}
+    except Exception as e:
+        logging.error(f"Preheat process failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
