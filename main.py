@@ -106,6 +106,7 @@ async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout
         if not cached_data:
             print("Cached sitemap data is empty, refetching...")
         else:
+            print(f"Using cached data for {url}")
             return cached_data  # Utilizar los datos del caché si están presentes y son válidos
 
     headers = {
@@ -128,25 +129,26 @@ async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout
         if 'sitemapindex' in sitemap_contents:
             sitemap_indices = sitemap_contents.get('sitemapindex', {}).get('sitemap', [])
             sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
-            for sitemap in sitemap_indices:
-                sitemap_url = sitemap.get('loc')
-                child_urls = await fetch_sitemap(client, sitemap_url, redis_client, timeout_config)
-                if child_urls:
-                    all_urls.extend(child_urls)
+            child_tasks = [asyncio.create_task(fetch_sitemap(client, sitemap.get('loc'), redis_client, timeout_config)) for sitemap in sitemap_indices]
+            children_urls = await asyncio.gather(*child_tasks)
+            for urls in children_urls:
+                if urls:
+                    all_urls.extend(urls)
         elif 'urlset' in sitemap_contents:
             urls = [url.get('loc') for url in sitemap_contents.get('urlset', {}).get('url', [])]
             all_urls.extend(urls)  # Directly add since they are final URLs
 
-        if all_urls:
-            await redis_client.set(redis_key, json.dumps(all_urls), ex=86400)  # 24-hour cache expiration
-            print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
+        validated_urls = await validate_urls(client, all_urls)
+        if validated_urls:
+            await redis_client.set(redis_key, json.dumps(validated_urls), ex=86400)  # 24-hour cache expiration
+            print(f"Fetched and validated {len(validated_urls)} URLs from the sitemap at {url}.")
+            return validated_urls
         else:
-            print(f"No URLs found in the sitemap at {url}. Not caching empty result.")
+            print(f"No valid URLs found in the sitemap at {url}. Not caching empty result.")
             return None
     except Exception as e:
         print(f"Exception occurred while fetching sitemap from {url}: {e}")
         return None
-    return all_urls
 
 async def fetch_url(client, url, timeout_config, max_redirects=5):
     current_url = url
