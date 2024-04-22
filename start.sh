@@ -6,7 +6,7 @@ echo "Servidor iniciado en el PID $PID."
 
 check_health() {
     echo "Verificando la salud del servicio..."
-    response=$(curl -s http://localhost:${PORT:-8000}/health)
+    response=$(curl -s http://localhost:${PORT:-10000}/health)
     echo "Respuesta de salud: $response"
     if echo "$response" | grep -q '"status":"ok"'; then
         echo "Verificación de salud exitosa."
@@ -24,7 +24,7 @@ until check_health; do
 done
 
 echo "Iniciando el precalentamiento del servicio..."
-if curl -s http://localhost:${PORT:-8000}/preheat | grep -q '"status":"ok"'; then
+if curl -s http://localhost:${PORT:-10000}/preheat | grep -q '"status":"ok"'; then
     echo "Precalentamiento completado exitosamente."
 else
     echo "Fallo en el precalentamiento del servicio."

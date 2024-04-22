@@ -26,6 +26,20 @@ from aiohttp import ClientSession
 load_dotenv()
 
 app = FastAPI(title="ErnieRank API")
+
+async def get_redis_connection():
+    try:
+        redis = await Redis.from_url("redis://localhost:6379", encoding="utf-8", decode_responses=True)
+        await redis.ping()
+        return redis
+    except Exception as e:
+        print(f"Error connecting to Redis: {e}")
+        raise
+
+@backoff.on_exception(backoff.expo, ConnectionError, max_time=60)
+async def startup_redis():
+    app.state.redis = await get_redis_connection()
+
 router = APIRouter()
 
 logging.basicConfig(level=logging.INFO)
@@ -75,16 +89,10 @@ class RedisMiddleware(BaseHTTPMiddleware):
 
 @app.on_event("startup")
 async def startup_event():
-    app.state.redis = await Redis.from_url("redis://red-co9d0e5jm4es73atc0ng:6379", encoding="utf-8", decode_responses=True)
-    try:
-        await app.state.redis.ping()
-    except Exception as e:
-        print(f"Failed to connect to Redis: {str(e)}")
-        raise HTTPException(status_code=500, detail="Redis connection failed")
+    app.state.client = httpx.AsyncClient()
 
 @app.get("/preheat")
 async def preheat():
-    # Simulate a preheat by pinging Redis
     if await app.state.redis.ping():
         return {"status": "ok"}
     else:
@@ -92,7 +100,7 @@ async def preheat():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    await app.state.redis.close()
+    await app.state.client.aclose()
 
 app.add_middleware(RedisMiddleware)
 
@@ -119,48 +127,19 @@ class BatchRequest(BaseModel):
     batch_size: int = 50
     start: int = 0   # valor por defecto para iniciar, asegura que siempre tenga un valor
 
-@router.post("/process_urls_in_batches")
-async def process_urls_in_batches(request: BatchRequest):
-    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    print(f"Fetching URLs from: {sitemap_url}")
-    
+@app.post("/process_urls_in_batches")
+async def process_urls_in_batches():
+    sitemap_url = "https://aulacm.com/sitemap_index.xml"
     try:
-        urls = await fetch_sitemap(app.state.client, sitemap_url, app.state.redis)
-    except Exception as e:
-        print(f"Failed to fetch sitemap: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch sitemap")
-
-    if not urls:
-        print("No URLs found in the sitemap.")
-        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
-    
-    print(f"Total URLs fetched for processing: {len(urls)}")
-    urls_to_process = urls[request.start:request.start + request.batch_size]
-    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
-
-    tasks = [analyze_url(url, app.state.client, app.state.redis) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-    print(f"Results received: {results}")
-
-    valid_results = [{
-        "url": result['url'],
-        "title": result.get('title', "No title provided"),
-        "main_keyword": result.get('main_keyword', "Keyword not specified"),
-        "secondary_keywords": result.get('secondary_keywords', []),
-        "semantic_search_intent": result.get('semantic_search_intent', "Intent not specified")
-    } for result in results if result]
-
-    print(f"Filtered results: {valid_results}")
-
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
-    print(f"More batches: {more_batches}, Next batch start index: {next_start}")
-
-    return {
-        "processed_urls": valid_results,
-        "more_batches": more_batches,
-        "next_batch_start": next_start if more_batches else None
-    }
+        response = await app.state.client.get(sitemap_url)
+        response.raise_for_status()
+        # Aquí deberías procesar el sitemap y extraer las URLs
+        urls = []  # Supongamos que esta es tu lista de URLs extraídas
+        return JSONResponse(content={"status": "success", "urls": urls, "count": len(urls)})
+    except httpx.RequestError as exc:
+        return JSONResponse(status_code=500, content={"message": "Error fetching sitemap", "error": str(exc)})
+    except httpx.HTTPStatusError as exc:
+        return JSONResponse(status_code=exc.response.status_code, content={"message": "Error with sitemap response", "error": str(exc.response.status_text)})
 
 def extract_urls_from_sitemap(sitemap_contents: dict) -> List[str]:
     urls = []
