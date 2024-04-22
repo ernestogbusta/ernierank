@@ -36,7 +36,8 @@ else
 fi
 
 echo "Procesando el primer lote de URLs para precalentar caches y componentes del sistema..."
-if curl -s -X POST "http://localhost:${PORT:-10000}/process_urls_in_batches?start=0&batch_size=50" | grep -q 'success'; then
+# Asegúrate de que la URL y parámetros aquí coincidan con cómo tu API está esperando recibir las llamadas
+if curl -s -X POST "http://localhost:${PORT:-10000}/process_urls_in_batches" -H "Content-Type: application/json" -d '{"start":0,"batch_size":50}' | grep -q 'success'; then
     echo "Primer lote de URLs procesado exitosamente."
 else
     echo "Fallo al procesar el primer lote de URLs."

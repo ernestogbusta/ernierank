@@ -85,14 +85,16 @@ async def startup_event():
 
 @app.get("/preheat")
 async def preheat():
-    """Preheat the application by loading essential components."""
+    """Preheat the application by making a lightweight call to ensure components are ready."""
+    # Consider a simple operation, such as a Redis 'ping' or a lightweight API call
     try:
-        async with aiohttp.ClientSession() as session:
-            # Realiza llamadas a endpoints críticos para cargar configuraciones o datos necesarios
-            await fetch('http://example.com/homepage', session)  # Cambia la URL según necesidad
-        return {"status": "Preheat successful"}
+        redis_client = app.state.redis
+        if not redis_client.ping():
+            raise HTTPException(status_code=500, detail="Redis not responding")
+        # Optionally make a lightweight HTTP call or other checks here
+        return {"status": "ok"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Preheat failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.on_event("shutdown")
 async def shutdown_event():
