@@ -20,15 +20,15 @@ import subprocess
 from difflib import SequenceMatcher
 import logging
 
-class BatchRequest(BaseModel):
-    domain: str
-    batch_size: int = 50  # valor por defecto
-    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
-
 load_dotenv()
 app = FastAPI(title="ErnieRank API")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class BatchRequest(BaseModel):
+    domain: str
+    batch_size: int = 50  # valor por defecto
+    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 # Middleware para manejar la conexión de Redis
 class RedisMiddleware(BaseHTTPMiddleware):
@@ -40,9 +40,17 @@ class RedisMiddleware(BaseHTTPMiddleware):
 # Eventos de inicio y cierre para configurar y cerrar Redis
 @app.on_event("startup")
 async def startup_event():
-    timeout = Timeout(5.0, read=150.0)  
-    app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-    app.state.client = httpx.AsyncClient(timeout=timeout)
+    # Configuración del cliente HTTP y Redis
+    app.state.redis = Redis(host="localhost", port=6379, decode_responses=True)
+    app.state.client = httpx.AsyncClient()
+    
+    # Llamada al endpoint de pre-calentamiento
+    try:
+        preheat_response = await preheat()
+        logging.info(f"Preheat completed successfully: {preheat_response}")
+    except Exception as e:
+        logging.error(f"Preheat failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Preheat process failed during startup")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -64,8 +72,9 @@ async def preheat():
     logging.info("Starting preheat process.")
     try:
         # Redis connection test
-        app.state.redis.set("test", "value")
-        if app.state.redis.get("test") == b"value":
+        await app.state.redis.set("test", "value")
+        test_value = await app.state.redis.get("test")
+        if test_value == "value":
             logging.info("Redis preheat successful.")
         else:
             logging.error("Redis preheat failed.")
@@ -83,22 +92,7 @@ async def preheat():
         return {"status": "OK"}
     except Exception as e:
         logging.error(f"Preheat failed: {e}")
-        raise HTTPException(status_code=500, detail="Preheat process failed")
-
-@app.post("/process_urls_in_batches")
-async def process_urls_in_batches(request: BatchRequest):
-    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    print(f"Fetching URLs from: {sitemap_url}")
-    
-    try:
-        urls = await fetch_sitemap(app.state.client, sitemap_url, app.state.redis)
-    except Exception as e:
-        print(f"Failed to fetch sitemap: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch sitemap")
-
-    if not urls:
-        print("No URLs found in the sitemap.")
-        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
+        return {"status": "Failed", "reason": str(e)}
     
     print(f"Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
@@ -839,8 +833,5 @@ def analyze_wpo(url):
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == 'test':
-        test_api()
-    else:
-        uvicorn.run(app, host="0.0.0.0", port=10000)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000)
