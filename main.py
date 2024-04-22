@@ -75,7 +75,7 @@ class RedisMiddleware(BaseHTTPMiddleware):
 
 @app.on_event("startup")
 async def startup_event():
-    app.state.redis = await Redis.from_url("redis://localhost:6379", encoding="utf-8", decode_responses=True)
+    app.state.redis = await Redis.from_url("redis://red-co9d0e5jm4es73atc0ng:6379", encoding="utf-8", decode_responses=True)
     try:
         await app.state.redis.ping()
     except Exception as e:
