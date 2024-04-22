@@ -18,6 +18,8 @@ from redis.asyncio import Redis
 from dotenv import load_dotenv
 import subprocess
 import logging
+import aiohttp
+from aiohttp import ClientSession
 
 class BatchRequest(BaseModel):
     domain: str
