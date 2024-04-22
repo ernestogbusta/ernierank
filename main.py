@@ -17,59 +17,14 @@ from starlette.responses import Response
 from redis.asyncio import Redis
 from dotenv import load_dotenv
 import subprocess
-from difflib import SequenceMatcher
-import logging
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-load_dotenv()
-app = FastAPI(title="ErnieRank API")
-
-@app.get("/preheat")
-async def preheat():
-    logging.info("Starting preheat process.")
-    errors = []
-
-    # Preheat Redis
-    try:
-        await app.state.redis.set("preheat_test", "success")
-        test_value = await app.state.redis.get("preheat_test")
-        if test_value == "success":
-            logging.info("Redis preheat successful.")
-        else:
-            error_msg = "Redis preheat failed: test value did not match."
-            logging.error(error_msg)
-            errors.append(error_msg)
-    except Exception as e:
-        error_msg = f"Redis preheat exception: {str(e)}"
-        logging.error(error_msg)
-        errors.append(error_msg)
-
-    # Preheat HTTP client
-    try:
-        response = await app.state.client.get("https://www.example.com")
-        if response.status_code == 200:
-            logging.info("HTTP client preheat successful.")
-        else:
-            error_msg = f"HTTP client preheat failed: Status code {response.status_code}"
-            logging.error(error_msg)
-            errors.append(error_msg)
-    except Exception as e:
-        error_msg = f"HTTP client preheat exception: {str(e)}"
-        logging.error(error_msg)
-        errors.append(error_msg)
-
-    if not errors:
-        logging.info("Preheat process completed successfully.")
-        return {"status": "OK"}
-    else:
-        logging.info("Preheat process completed with errors.")
-        return {"status": "Failed", "errors": errors}
 
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int = 50  # valor por defecto
+    batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
+
+load_dotenv()
+app = FastAPI(title="ErnieRank API")
 
 # Middleware para manejar la conexión de Redis
 class RedisMiddleware(BaseHTTPMiddleware):
@@ -525,7 +480,7 @@ async def process_all_batches_endpoint(request: Request):
 
 async def process_all_batches(domain):
     start = 0
-    batch_size = 50
+    batch_size = 100
     more_batches = True
     results = []
 
@@ -584,5 +539,8 @@ def test_api():
         print(str(e))
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == 'test':
+        test_api()
+    else:
+        uvicorn.run(app, host="0.0.0.0", port=8000)
