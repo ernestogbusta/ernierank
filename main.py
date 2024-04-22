@@ -18,6 +18,7 @@ from redis.asyncio import Redis
 from dotenv import load_dotenv
 import subprocess
 from difflib import SequenceMatcher
+import logging
 
 class BatchRequest(BaseModel):
     domain: str
