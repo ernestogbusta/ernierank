@@ -40,6 +40,18 @@ async def startup_event():
     app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
     app.state.client = httpx.AsyncClient(timeout=timeout)
 
+@app.get("/preheat")
+async def preheat():
+    # URL del sitemap principal
+    sitemap_url = "https://aulacm.com/sitemap_index.xml"
+    try:
+        urls = await fetch_sitemap(app.state.client, sitemap_url, app.state.redis)
+        if not urls:
+            raise HTTPException(status_code=404, detail="No URLs found in the initial sitemap.")
+        return {"status": "success", "message": "Preheat completed", "url_count": len(urls)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.redis.close()
