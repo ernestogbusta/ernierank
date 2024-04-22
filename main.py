@@ -20,15 +20,51 @@ import subprocess
 from difflib import SequenceMatcher
 import logging
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 load_dotenv()
-
-redis_host = os.getenv("REDIS_URL", "redis://red-co9d0e5jm4es73atc0ng:6379")
-redis = Redis.from_url(redis_host)
-
 app = FastAPI(title="ErnieRank API")
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+@app.get("/preheat")
+async def preheat():
+    logging.info("Starting preheat process.")
+    errors = []
+
+    # Preheat Redis
+    try:
+        await app.state.redis.set("preheat_test", "success")
+        test_value = await app.state.redis.get("preheat_test")
+        if test_value == "success":
+            logging.info("Redis preheat successful.")
+        else:
+            error_msg = "Redis preheat failed: test value did not match."
+            logging.error(error_msg)
+            errors.append(error_msg)
+    except Exception as e:
+        error_msg = f"Redis preheat exception: {str(e)}"
+        logging.error(error_msg)
+        errors.append(error_msg)
+
+    # Preheat HTTP client
+    try:
+        response = await app.state.client.get("https://www.example.com")
+        if response.status_code == 200:
+            logging.info("HTTP client preheat successful.")
+        else:
+            error_msg = f"HTTP client preheat failed: Status code {response.status_code}"
+            logging.error(error_msg)
+            errors.append(error_msg)
+    except Exception as e:
+        error_msg = f"HTTP client preheat exception: {str(e)}"
+        logging.error(error_msg)
+        errors.append(error_msg)
+
+    if not errors:
+        logging.info("Preheat process completed successfully.")
+        return {"status": "OK"}
+    else:
+        logging.info("Preheat process completed with errors.")
+        return {"status": "Failed", "errors": errors}
 
 class BatchRequest(BaseModel):
     domain: str
@@ -42,27 +78,17 @@ class RedisMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
+# Eventos de inicio y cierre para configurar y cerrar Redis
 @app.on_event("startup")
 async def startup_event():
-    # Configuración del cliente HTTP
-    app.state.client = httpx.AsyncClient()
-    
-    # Configura el cliente de Redis para usar la URL interna de Redis
-    app.state.redis = Redis.from_url("redis://red-co9d0e5jm4es73atc0ng:6379", decode_responses=True, encoding="utf-8")
-    
-    # Llamada al endpoint de pre-calentamiento
-    try:
-        preheat_response = await preheat()
-        logging.info(f"Preheat completed successfully: {preheat_response}")
-    except Exception as e:
-        logging.error(f"Preheat failed: {str(e)}")
-        raise HTTPException(status_code=500, detail="Preheat process failed during startup")
+    timeout = Timeout(15.0, read=180.0)  # 15 segundos para conectar, 180 segundos para leer
+    app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+    app.state.client = httpx.AsyncClient(timeout=timeout)
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    await app.state.client.aclose()
-    app.state.redis.close()
-    logging.info("Application shutdown complete.")
+    await app.state.redis.close()
+    await app.state.client.aclose()  # Properly close the client
 
 app.add_middleware(RedisMiddleware)
 
@@ -73,32 +99,20 @@ async def root(request: Request):
     value = await redis_client.get("key")
     return {"hello": "world", "key": value}
 
-@app.get("/preheat")
-async def preheat():
-    logging.info("Starting preheat process.")
+@app.post("/process_urls_in_batches")
+async def process_urls_in_batches(request: BatchRequest):
+    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
+    print(f"Fetching URLs from: {sitemap_url}")
+    
     try:
-        # Redis connection test
-        await app.state.redis.set("test", "value")
-        test_value = await app.state.redis.get("test")
-        if test_value == "value":
-            logging.info("Redis preheat successful.")
-        else:
-            logging.error("Redis preheat failed.")
-            raise Exception("Redis test failed")
-
-        # HTTP client test
-        response = await app.state.client.get("https://example.com")
-        if response.status_code == 200:
-            logging.info("HTTP client preheat successful.")
-        else:
-            logging.error("HTTP client preheat failed.")
-            raise Exception("HTTP client test failed")
-
-        logging.info("Preheat process completed successfully.")
-        return {"status": "OK"}
+        urls = await fetch_sitemap(app.state.client, sitemap_url, app.state.redis)
     except Exception as e:
-        logging.error(f"Preheat failed: {e}")
-        return {"status": "Failed", "reason": str(e)}
+        print(f"Failed to fetch sitemap: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch sitemap")
+
+    if not urls:
+        print("No URLs found in the sitemap.")
+        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
     
     print(f"Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
@@ -128,7 +142,7 @@ async def preheat():
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout(5.0, read=150.0)):
+async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout(10.0, read=60.0)):
     redis_key = f"sitemap:{url}"
     cached_sitemap = await redis_client.get(redis_key)
     if cached_sitemap:
@@ -209,54 +223,11 @@ async def fetch_url(client, url, timeout_config, max_redirects=5):
     print(f"Failed to fetch URL after {max_redirects} redirects: {current_url}")
     return None
 
-@app.post("/process_urls_in_batches")
-async def process_urls_in_batches(request: BatchRequest):
-    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    print(f"Fetching URLs from: {sitemap_url}")
-    
-    try:
-        urls = await fetch_sitemap(app.state.client, sitemap_url, app.state.redis)
-    except Exception as e:
-        print(f"Failed to fetch sitemap: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch sitemap")
-
-    if not urls:
-        print("No URLs found in the sitemap.")
-        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
-    
-    print(f"Total URLs fetched for processing: {len(urls)}")
-    urls_to_process = urls[request.start:request.start + request.batch_size]
-    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
-
-    tasks = [analyze_url(url, app.state.client, app.state.redis) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-    print(f"Results received: {results}")
-
-    valid_results = [{
-        "url": result['url'],
-        "title": result.get('title', "No title provided"),
-        "main_keyword": result.get('main_keyword', "Keyword not specified"),
-        "secondary_keywords": result.get('secondary_keywords', []),
-        "semantic_search_intent": result.get('semantic_search_intent', "Intent not specified")
-    } for result in results if result]
-
-    print(f"Filtered results: {valid_results}")
-
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
-    print(f"More batches: {more_batches}, Next batch start index: {next_start}")
-
-    return {
-        "processed_urls": valid_results,
-        "more_batches": more_batches,
-        "next_batch_start": next_start if more_batches else None
-    }
-
 @app.get("/test-redirect")
 async def test_redirect():
     client = app.state.client  # Utiliza el cliente HTTP almacenado en el estado de la app
     url = 'http://example.com/some-redirect-url'
-    timeout_config = Timeout(5.0, read=30.0)  # Configura los tiempos de espera apropiadamente
+    timeout_config = Timeout(10.0, read=60.0)  # Configura los tiempos de espera apropiadamente
 
     try:
         final_url = await fetch_url(client, url, timeout_config)
