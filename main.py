@@ -20,7 +20,7 @@ import subprocess
 
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int = 100  # valor por defecto
+    batch_size: int = 50  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 load_dotenv()
@@ -487,7 +487,7 @@ async def process_all_batches_endpoint(request: Request):
 
 async def process_all_batches(domain):
     start = 0
-    batch_size = 100
+    batch_size = 50
     more_batches = True
     results = []
 
