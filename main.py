@@ -26,6 +26,57 @@ class BatchRequest(BaseModel):
 load_dotenv()
 app = FastAPI(title="ErnieRank API")
 
+
+
+# Configuraciones específicas de Render y Redis
+REDIS_HOST = 'redis_instance'
+REDIS_PORT = 6379
+REDIS_URL = 'redis://red-co9d0e5jm4es73atc0ng:6379'
+EXTERNAL_SERVICE_URL = 'http://localhost:10000/external-health'
+
+async def check_redis_connection() -> bool:
+    try:
+        # Utilizar la URL completa si es necesario para la conexión
+        redis_client = Redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+        if redis_client.ping():
+            return True
+        return False
+    except RedisError as e:
+        print(f"Redis connection error: {e}")
+        return False
+
+async def check_external_api() -> bool:
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(EXTERNAL_SERVICE_URL)
+            if response.status_code == 200:
+                return True
+            return False
+        except httpx.RequestError as e:
+            print(f"External API connection error: {e}")
+            return False
+
+@app.get("/health")
+async def health_check():
+    redis_ok = await check_redis_connection()
+    external_api_ok = await check_external_api()
+
+    if redis_ok and external_api_ok:
+        return JSONResponse(content={"status": "ok"}, status_code=200)
+    
+    details = {
+        "redis": "operational" if redis_ok else "unreachable",
+        "external_api": "operational" if external_api_ok else "unreachable"
+    }
+    return JSONResponse(content={"status": "error", "details": details}, status_code=503)
+
+@app.get("/external-health")
+async def external_health_check():
+    # Esta función podría expandirse para verificar otros componentes internos si es necesario
+    return {"status": "ok"}
+
+
+
 # Middleware para manejar la conexión de Redis
 class RedisMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
