@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, Query
+from fastapi import FastAPI, HTTPException, Request, Depends, Query, APIRouter
 import httpx
 from httpx import Timeout
 from bs4 import BeautifulSoup
