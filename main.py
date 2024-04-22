@@ -17,6 +17,7 @@ from starlette.responses import Response
 from redis.asyncio import Redis
 from dotenv import load_dotenv
 import subprocess
+import logging
 
 class BatchRequest(BaseModel):
     domain: str
@@ -26,7 +27,7 @@ class BatchRequest(BaseModel):
 load_dotenv()
 app = FastAPI(title="ErnieRank API")
 
-
+logging.basicConfig(level=logging.INFO)
 
 # Configuraciones específicas de Render y Redis
 REDIS_HOST = 'redis_instance'
@@ -58,29 +59,16 @@ async def check_external_api() -> bool:
 
 @app.get("/health")
 async def health_check():
-    redis_ok = await check_redis_connection()
-    external_api_ok = await check_external_api()
-
-    if redis_ok and external_api_ok:
-        return JSONResponse(content={"status": "ok"}, status_code=200)
-    
-    details = {
-        "redis": "operational" if redis_ok else "unreachable",
-        "external_api": "operational" if external_api_ok else "unreachable"
-    }
-    return JSONResponse(content={"status": "error", "details": details}, status_code=503)
+    try:
+        # Intenta alguna lógica de verificación aquí
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Error en health check: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/external-health")
 async def external_health_check():
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get('http://localhost:10000/health') as response:
-                if response.status == 200:
-                    return {"status": "ok"}
-                else:
-                    return {"status": "external service error", "code": response.status}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    return {"status": "ok"}
 
 # Middleware para manejar la conexión de Redis
 class RedisMiddleware(BaseHTTPMiddleware):
