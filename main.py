@@ -20,10 +20,11 @@ import subprocess
 from difflib import SequenceMatcher
 import logging
 
-redis = Redis.from_url("redis://red-co9d0e5jm4es73atc0ng:6379")
+
+load_dotenv()
+
 redis_host = os.getenv("REDIS_URL", "redis://red-co9d0e5jm4es73atc0ng:6379")
 redis = Redis.from_url(redis_host)
-load_dotenv()
 
 app = FastAPI(title="ErnieRank API")
 
