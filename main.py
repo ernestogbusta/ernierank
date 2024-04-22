@@ -37,12 +37,14 @@ class RedisMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
-# Eventos de inicio y cierre para configurar y cerrar Redis
 @app.on_event("startup")
 async def startup_event():
-    # Configuración del cliente HTTP y Redis
-    app.state.redis = Redis(host="localhost", port=6379, decode_responses=True)
+    # Configuración del cliente HTTP
     app.state.client = httpx.AsyncClient()
+    
+    # Configura el cliente de Redis para usar la URL interna de Redis proporcionada por Render
+    redis_url = os.getenv("REDIS_URL", "redis://red-co9d0e5jm4es73atc0ng:6379")
+    app.state.redis = Redis.from_url(redis_url, decode_responses=True, encoding="utf-8")
     
     # Llamada al endpoint de pre-calentamiento
     try:
