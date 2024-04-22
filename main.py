@@ -21,10 +21,7 @@ import logging
 import aiohttp
 from aiohttp import ClientSession
 
-class BatchRequest(BaseModel):
-    domain: str
-    batch_size: int = 50  # valor por defecto
-    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
+
 
 load_dotenv()
 
@@ -119,6 +116,11 @@ async def fetch(url: str, session: aiohttp.ClientSession) -> str:
         return {"error": f"Failed to fetch {url}: {str(e)}"}  # Manejo de errores de cliente HTTP
     except Exception as e:
         return {"error": f"An unexpected error occurred: {str(e)}"}  # Manejo de errores inesperados
+
+class BatchRequest(BaseModel):
+    domain: str
+    batch_size: int = 50
+    start: int = 0   # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 @router.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
