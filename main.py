@@ -20,7 +20,11 @@ import subprocess
 from difflib import SequenceMatcher
 import logging
 
+redis = Redis.from_url("redis://red-co9d0e5jm4es73atc0ng:6379")
+redis_host = os.getenv("REDIS_URL", "redis://red-co9d0e5jm4es73atc0ng:6379")
+redis = Redis.from_url(redis_host)
 load_dotenv()
+
 app = FastAPI(title="ErnieRank API")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -42,9 +46,8 @@ async def startup_event():
     # Configuración del cliente HTTP
     app.state.client = httpx.AsyncClient()
     
-    # Configura el cliente de Redis para usar la URL interna de Redis proporcionada por Render
-    redis_url = os.getenv("REDIS_URL", "redis://red-co9d0e5jm4es73atc0ng:6379")
-    app.state.redis = Redis.from_url(redis_url, decode_responses=True, encoding="utf-8")
+    # Configura el cliente de Redis para usar la URL interna de Redis
+    app.state.redis = Redis.from_url("redis://red-co9d0e5jm4es73atc0ng:6379", decode_responses=True, encoding="utf-8")
     
     # Llamada al endpoint de pre-calentamiento
     try:
