@@ -82,12 +82,10 @@ async def startup_event():
 @app.get("/preheat")
 async def preheat():
     """Preheat the application by making a lightweight call to ensure components are ready."""
-    # Consider a simple operation, such as a Redis 'ping' or a lightweight API call
     try:
         redis_client = app.state.redis
-        if not redis_client.ping():
+        if not await redis_client.ping():
             raise HTTPException(status_code=500, detail="Redis not responding")
-        # Optionally make a lightweight HTTP call or other checks here
         return {"status": "ok"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -169,54 +167,32 @@ async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout
     redis_key = f"sitemap:{url}"
     cached_sitemap = await redis_client.get(redis_key)
     if cached_sitemap:
-        print(f"Cache hit for sitemap at {url}")
-        cached_data = json.loads(cached_sitemap)
-        if not cached_data:
-            print("Cached sitemap data is empty, refetching...")
-        else:
-            print(f"Using cached data for {url}")
-            return cached_data  # Utilizar los datos del caché si están presentes y son válidos
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
-        "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
-    }
+        return json.loads(cached_sitemap)
 
     try:
-        response = await client.get(url, headers=headers, timeout=timeout_config)
+        response = await client.get(url, timeout=timeout_config)
         if response.status_code != 200:
-            print(f"HTTP status code {response.status_code} received for {url}, retrying...")
-            response = await client.get(url, headers=headers, timeout=timeout_config)  # Retry once if non-200 received
-            if response.status_code != 200:
-                print(f"Failed to fetch sitemap after retry for {url}: {response.status_code}")
-                return None
-
+            raise HTTPException(status_code=404, detail=f"Sitemap not found at {url}")
+        
         sitemap_contents = xmltodict.parse(response.content)
-        all_urls = []
-
-        if 'sitemapindex' in sitemap_contents:
-            sitemap_indices = sitemap_contents.get('sitemapindex', {}).get('sitemap', [])
-            sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
-            child_tasks = [asyncio.create_task(fetch_sitemap(client, sitemap.get('loc'), redis_client, timeout_config)) for sitemap in sitemap_indices]
-            children_urls = await asyncio.gather(*child_tasks)
-            for urls in children_urls:
-                if urls:
-                    all_urls.extend(urls)
-        elif 'urlset' in sitemap_contents:
-            urls = [url.get('loc') for url in sitemap_contents.get('urlset', {}).get('url', [])]
-            all_urls.extend(urls)  # Directly add since they are final URLs
-
-        validated_urls = await validate_urls(client, all_urls)
-        if validated_urls:
-            await redis_client.set(redis_key, json.dumps(validated_urls), ex=86400)  # 24-hour cache expiration
-            print(f"Fetched and validated {len(validated_urls)} URLs from the sitemap at {url}.")
-            return validated_urls
-        else:
-            print(f"No valid URLs found in the sitemap at {url}. Not caching empty result.")
-            return None
+        all_urls = extract_urls_from_sitemap(sitemap_contents)
+        if all_urls:
+            await redis_client.set(redis_key, json.dumps(all_urls), ex=86400)  # 24-hour cache expiration
+        return all_urls
     except Exception as e:
-        print(f"Exception occurred while fetching sitemap from {url}: {e}")
-        return None
+        raise HTTPException(status_code=500, detail=str(e))
+
+def extract_urls_from_sitemap(sitemap_contents):
+    all_urls = []
+    if 'sitemapindex' in sitemap_contents:
+        sitemap_indices = sitemap_contents['sitemapindex']['sitemap']
+        sitemap_indices = [sitemap_indices] if isinstance(sitemap_indices, dict) else sitemap_indices
+        for sitemap in sitemap_indices:
+            all_urls.extend(sitemap['loc'])
+    elif 'urlset' in sitemap_contents:
+        urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
+        all_urls.extend(urls)
+    return all_urls
 
 async def fetch_urls_from_sitemap(sitemap_url: str) -> List[str]:
     """Fetch URLs from a given sitemap XML using lxml for parsing."""
