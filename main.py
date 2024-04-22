@@ -27,7 +27,9 @@ class BatchRequest(BaseModel):
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 load_dotenv()
+
 app = FastAPI(title="ErnieRank API")
+router = APIRouter()
 
 logging.basicConfig(level=logging.INFO)
 
@@ -59,14 +61,9 @@ async def check_external_api() -> bool:
             print(f"External API connection error: {e}")
             return False
 
-@app.get("/health")
+@router.get("/health")
 async def health_check():
-    try:
-        # Intenta alguna lógica de verificación aquí
-        return {"status": "ok"}
-    except Exception as e:
-        logging.error(f"Error en health check: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "ok"}
 
 @app.get("/external-health")
 async def external_health_check():
@@ -640,6 +637,8 @@ def test_api():
         print(presentation_output)
     except Exception as e:
         print(str(e))
+
+app.include_router(router)
 
 if __name__ == "__main__":
     import sys
