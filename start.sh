@@ -1,6 +1,6 @@
 #!/bin/bash
 echo "Iniciando el servidor Uvicorn..."
-uvicorn main:app --host=0.0.0.0 --port=${PORT:-8000} &
+uvicorn main:app --host=0.0.0.0 --port=${PORT:-10000} &
 PID=$!
 echo "Servidor iniciado en el PID $PID."
 
@@ -8,7 +8,7 @@ check_health() {
     echo "Verificando la salud del servicio..."
     response=$(curl -s http://localhost:${PORT:-8000}/health)
     echo "Respuesta de salud: $response"
-    if [[ "$response" == *'"status":"ok"'* ]]; then
+    if echo "$response" | grep -q '"status":"ok"'; then
         echo "Verificación de salud exitosa."
         return 0
     else

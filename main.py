@@ -58,8 +58,8 @@ async def check_external_api() -> bool:
             print(f"External API connection error: {e}")
             return False
 
-@router.get("/health")
-async def health_check():
+@app.get("/health")
+async def health():
     return {"status": "ok"}
 
 @app.get("/external-health")
@@ -75,18 +75,20 @@ class RedisMiddleware(BaseHTTPMiddleware):
 
 @app.on_event("startup")
 async def startup_event():
-    app.state.redis = Redis(host="localhost", decode_responses=True)
-    await app.state.redis.ping()
+    app.state.redis = await Redis.from_url("redis://localhost:6379", encoding="utf-8", decode_responses=True)
+    try:
+        await app.state.redis.ping()
+    except Exception as e:
+        print(f"Failed to connect to Redis: {str(e)}")
+        raise HTTPException(status_code=500, detail="Redis connection failed")
 
 @app.get("/preheat")
 async def preheat():
-    try:
-        redis_client = app.state.redis
-        if not await redis_client.ping():
-            raise HTTPException(status_code=500, detail="Redis not responding")
+    # Simulate a preheat by pinging Redis
+    if await app.state.redis.ping():
         return {"status": "ok"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    else:
+        raise HTTPException(status_code=500, detail="Failed to preheat Redis")
 
 @app.on_event("shutdown")
 async def shutdown_event():
