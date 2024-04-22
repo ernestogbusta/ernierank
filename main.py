@@ -34,6 +34,7 @@ logging.basicConfig(level=logging.INFO)
 REDIS_HOST = 'redis_instance'
 REDIS_PORT = 6379
 REDIS_URL = 'redis://red-co9d0e5jm4es73atc0ng:6379'
+CLIENT_TIMEOUT = httpx.Timeout(10.0, read=60.0)
 EXTERNAL_SERVICE_URL = 'http://localhost:10000/external-health'
 
 async def check_redis_connection() -> bool:
@@ -163,36 +164,47 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout(10.0, read=60.0)):
+def extract_urls_from_sitemap(sitemap_contents: dict) -> List[str]:
+    urls = []
+    if 'sitemapindex' in sitemap_contents:
+        for sitemap in sitemap_contents['sitemapindex'].get('sitemap', []):
+            urls.append(sitemap['loc'])
+    elif 'urlset' in sitemap_contents:
+        urls = [url['loc'] for url in sitemap_contents['urlset'].get('url', [])]
+    return urls
+
+async def fetch_sitemap(url: str, client: httpx.AsyncClient, redis_client) -> Optional[List[str]]:
     redis_key = f"sitemap:{url}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+        "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
+    }
+
     cached_sitemap = await redis_client.get(redis_key)
     if cached_sitemap:
         return json.loads(cached_sitemap)
 
     try:
-        response = await client.get(url, timeout=timeout_config)
+        response = await client.get(url, headers=headers, timeout=CLIENT_TIMEOUT)
         if response.status_code != 200:
-            raise HTTPException(status_code=404, detail=f"Sitemap not found at {url}")
+            response = await client.get(url, headers=headers, timeout=CLIENT_TIMEOUT)  # Retry once
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail=f"Sitemap not found at {url}")
         
         sitemap_contents = xmltodict.parse(response.content)
-        all_urls = extract_urls_from_sitemap(sitemap_contents)
-        if all_urls:
-            await redis_client.set(redis_key, json.dumps(all_urls), ex=86400)  # 24-hour cache expiration
-        return all_urls
+        urls = extract_urls_from_sitemap(sitemap_contents)
+
+        if urls:
+            await redis_client.set(redis_key, json.dumps(urls), ex=86400)  # 24-hour cache expiration
+        return urls
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def extract_urls_from_sitemap(sitemap_contents):
-    all_urls = []
-    if 'sitemapindex' in sitemap_contents:
-        sitemap_indices = sitemap_contents['sitemapindex']['sitemap']
-        sitemap_indices = [sitemap_indices] if isinstance(sitemap_indices, dict) else sitemap_indices
-        for sitemap in sitemap_indices:
-            all_urls.extend(sitemap['loc'])
-    elif 'urlset' in sitemap_contents:
-        urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
-        all_urls.extend(urls)
-    return all_urls
+@app.get("/fetch-sitemap/{url}")
+async def api_fetch_sitemap(url: str):
+    async with httpx.AsyncClient() as client, aioredis.from_url(REDIS_URL) as redis_client:
+        urls = await fetch_sitemap(url, client, redis_client)
+        return {"urls": urls}
 
 async def fetch_urls_from_sitemap(sitemap_url: str) -> List[str]:
     """Fetch URLs from a given sitemap XML using lxml for parsing."""
