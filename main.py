@@ -41,12 +41,11 @@ EXTERNAL_SERVICE_URL = 'http://localhost:10000/external-health'
 
 async def check_redis_connection() -> bool:
     try:
-        # Utilizar la URL completa si es necesario para la conexión
         redis_client = Redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
-        if redis_client.ping():
+        if await redis_client.ping():
             return True
         return False
-    except RedisError as e:
+    except Exception as e:  # Es mejor capturar la excepción específica
         print(f"Redis connection error: {e}")
         return False
 
