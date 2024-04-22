@@ -405,47 +405,54 @@ def find_meta_description(soup: BeautifulSoup) -> str:
     return "No description available"
 
 async def analyze_url(url: str, client: httpx.AsyncClient, redis_client: Redis) -> dict:
+    # Saltar URL si es una imagen
+    if url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp')):
+        print(f"Skipping image URL: {url}")
+        return None
+
+    # Revisar estado de la URL antes de procesar para asegurar que es una página con status 200
+    response = await client.head(url)
+    if response.status_code != 200:
+        print(f"Skipping URL due to non-200 status: {url} with status {response.status_code}")
+        return None
+
+    # Usar caché para evitar procesamiento repetido
     redis_key = f"url_analysis:{url}"
     cached_result = await redis_client.get(redis_key)
     if cached_result:
         print(f"Cache hit for URL: {url}")
         return json.loads(cached_result)
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
-    }
-    try:
-        response = await client.get(url, headers=headers)
-        if response.status_code != 200:
-            print(f"Skipping URL due to non-200 status code: {url} with status {response.status_code}")
-            return None
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-        slug = extract_slug(url)
-        title = soup.title.text if soup.title else "No title"
-        meta_description = find_meta_description(soup)
-        h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
-        h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
-        text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
-
-        main_keyword = slug
-        secondary_keywords = find_keywords(title, h1s, h2s, text_relevant, exclude=[slug])
-        semantic_search_intent = calculate_semantic_search_intent(main_keyword, secondary_keywords)
-
-        result = {
-            "url": url,
-            "title": title,
-            "meta_description": meta_description,
-            "main_keyword": main_keyword,
-            "secondary_keywords": secondary_keywords,
-            "semantic_search_intent": semantic_search_intent
-        }
-
-        await redis_client.set(redis_key, json.dumps(result), ex=86400)
-        return result
-    except Exception as e:
-        print(f"Error processing URL {url}: {e}")
+    # Realizar petición GET si el URL no está en caché o necesita actualización
+    response = await client.get(url)
+    if response.status_code != 200:
+        print(f"Failed to fetch URL {url} with status {response.status_code}, skipping...")
         return None
+
+    soup = BeautifulSoup(response.content, 'html.parser')
+    title = soup.title.text if soup.title else "No title"
+    meta_description = find_meta_description(soup)
+    h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
+    h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
+    text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
+
+    # Extraer palabras clave y slug
+    slug = extract_slug(url)
+    refined_keywords = refine_keywords(f"{title} {' '.join(h1s)} {' '.join(h2s)} {text_relevant}")
+    keyword_density = calculate_keyword_density(text_relevant, refined_keywords)
+
+    # Almacenar y devolver resultados
+    result = {
+        "url": url,
+        "status": response.status_code,
+        "title": title,
+        "meta_description": meta_description,
+        "h1s": h1s,
+        "h2s": h2s,
+        "slug": slug,
+        "refined_keywords": refined_keywords,
+        "keyword_density": keyword_density
+    }
 
 def calculate_semantic_search_intent(main_keyword, secondary_keywords):
     # Combine main and secondary keywords with given weights
@@ -543,4 +550,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == 'test':
         test_api()
     else:
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        uvicorn.run(app, host="0.0.0.0", port=10000)
