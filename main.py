@@ -73,16 +73,13 @@ class RedisMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
-# Eventos de inicio y cierre para configurar y cerrar Redis
 @app.on_event("startup")
 async def startup_event():
-    timeout = Timeout(15.0, read=180.0)  # 15 segundos para conectar, 180 segundos para leer
-    app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-    app.state.client = httpx.AsyncClient(timeout=timeout)
+    app.state.redis = Redis(host="localhost", decode_responses=True)
+    await app.state.redis.ping()
 
 @app.get("/preheat")
 async def preheat():
-    """Preheat the application by making a lightweight call to ensure components are ready."""
     try:
         redis_client = app.state.redis
         if not await redis_client.ping():
@@ -94,7 +91,6 @@ async def preheat():
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.redis.close()
-    await app.state.client.aclose()  # Properly close the client
 
 app.add_middleware(RedisMiddleware)
 
