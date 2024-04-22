@@ -28,6 +28,8 @@ class BatchRequest(BaseModel):
 load_dotenv()
 app = FastAPI(title="ErnieRank API")
 
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 # Middleware para manejar la conexión de Redis
 class RedisMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -44,8 +46,9 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    await app.state.redis.close()
-    await app.state.client.aclose()  # Properly close the client
+    await app.state.client.aclose()
+    app.state.redis.close()
+    logging.info("Application shutdown complete.")
 
 app.add_middleware(RedisMiddleware)
 
@@ -58,31 +61,29 @@ async def root(request: Request):
 
 @app.get("/preheat")
 async def preheat():
-    logging.info("Preheat process started.")
+    logging.info("Starting preheat process.")
     try:
-        # Realiza una conexión de prueba a Redis
-        logging.info("Testing Redis connection...")
-        app.state.redis.set("test_key", "test_value")
-        if app.state.redis.get("test_key") == "test_value":
-            logging.info("Redis connection OK.")
+        # Redis connection test
+        app.state.redis.set("test", "value")
+        if app.state.redis.get("test") == b"value":
+            logging.info("Redis preheat successful.")
         else:
-            logging.error("Redis connection FAILED.")
+            logging.error("Redis preheat failed.")
             raise Exception("Redis test failed")
 
-        # Realiza una solicitud HTTP de prueba a un endpoint interno
-        logging.info("Testing HTTP client by requesting an internal endpoint...")
-        response = await app.state.client.get("http://localhost:10000/test-endpoint")
+        # HTTP client test
+        response = await app.state.client.get("https://example.com")
         if response.status_code == 200:
-            logging.info("Internal HTTP client test OK.")
+            logging.info("HTTP client preheat successful.")
         else:
-            logging.error(f"Internal HTTP client test FAILED. Status code: {response.status_code}")
+            logging.error("HTTP client preheat failed.")
             raise Exception("HTTP client test failed")
 
         logging.info("Preheat process completed successfully.")
-        return {"status": "preheated"}
+        return {"status": "OK"}
     except Exception as e:
-        logging.error(f"Preheat process failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logging.error(f"Preheat failed: {e}")
+        raise HTTPException(status_code=500, detail="Preheat process failed")
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
