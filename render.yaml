@@ -1,23 +1,8 @@
 services:
-  - type: web
-    name: ernierank-api
-    env: python
-    region: oregon
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "sh start.sh"
-    envVars:
-      - key: PORT
-        value: "10000"
-    healthCheckPath: "/preheat"
-    numInstances:
-      min: 1
-      max: 1
-    plan: starter
-    scaling:
-      type: requests
-      periodSeconds: 60
-      requestsPerInstance: 500
-    resources:
-      cpu: 1
-      memoryGB: 1
-    autoDeploy: true
+- type: web
+  env: python
+  envVars:
+    - key: PORT
+      value: "8000"
+  buildCommand: "pip install -r requirements.txt"
+  startCommand: "uvicorn main:app --host=0.0.0.0 --port=${PORT:-8000}"

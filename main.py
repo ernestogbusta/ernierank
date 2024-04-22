@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, Query, APIRouter
+from fastapi import FastAPI, HTTPException, Request, Depends, Query
 import httpx
 from httpx import Timeout
 from bs4 import BeautifulSoup
@@ -17,68 +17,15 @@ from starlette.responses import Response
 from redis.asyncio import Redis
 from dotenv import load_dotenv
 import subprocess
-import logging
-import aiohttp
-from aiohttp import ClientSession
+from difflib import SequenceMatcher
 
-
+class BatchRequest(BaseModel):
+    domain: str
+    batch_size: int = 50  # valor por defecto
+    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 load_dotenv()
-
 app = FastAPI(title="ErnieRank API")
-
-async def get_redis_connection():
-    try:
-        redis = await Redis.from_url("redis://localhost:6379", encoding="utf-8", decode_responses=True)
-        await redis.ping()
-        return redis
-    except Exception as e:
-        print(f"Error connecting to Redis: {e}")
-        raise
-
-@backoff.on_exception(backoff.expo, ConnectionError, max_time=60)
-async def startup_redis():
-    app.state.redis = await get_redis_connection()
-
-router = APIRouter()
-
-logging.basicConfig(level=logging.INFO)
-
-# Configuraciones específicas de Render y Redis
-REDIS_HOST = 'redis_instance'
-REDIS_PORT = 6379
-REDIS_URL = 'redis://red-co9d0e5jm4es73atc0ng:6379'
-CLIENT_TIMEOUT = httpx.Timeout(10.0, read=60.0)
-EXTERNAL_SERVICE_URL = 'http://localhost:10000/external-health'
-
-async def check_redis_connection() -> bool:
-    try:
-        redis_client = Redis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
-        if await redis_client.ping():
-            return True
-        return False
-    except Exception as e:  # Es mejor capturar la excepción específica
-        print(f"Redis connection error: {e}")
-        return False
-
-async def check_external_api() -> bool:
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.get(EXTERNAL_SERVICE_URL)
-            if response.status_code == 200:
-                return True
-            return False
-        except httpx.RequestError as e:
-            print(f"External API connection error: {e}")
-            return False
-
-@app.get("/health")
-async def health():
-    return {"status": "ok"}
-
-@app.get("/external-health")
-async def external_health_check():
-    return {"status": "ok"}
 
 # Middleware para manejar la conexión de Redis
 class RedisMiddleware(BaseHTTPMiddleware):
@@ -87,20 +34,17 @@ class RedisMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
+# Eventos de inicio y cierre para configurar y cerrar Redis
 @app.on_event("startup")
 async def startup_event():
-    app.state.client = httpx.AsyncClient()
-
-@app.get("/preheat")
-async def preheat():
-    if await app.state.redis.ping():
-        return {"status": "ok"}
-    else:
-        raise HTTPException(status_code=500, detail="Failed to preheat Redis")
+    timeout = Timeout(5.0, read=150.0)  
+    app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+    app.state.client = httpx.AsyncClient(timeout=timeout)
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    await app.state.client.aclose()
+    await app.state.redis.close()
+    await app.state.client.aclose()  # Properly close the client
 
 app.add_middleware(RedisMiddleware)
 
@@ -111,90 +55,99 @@ async def root(request: Request):
     value = await redis_client.get("key")
     return {"hello": "world", "key": value}
 
-async def fetch(url: str, session: aiohttp.ClientSession) -> str:
-    """Fetch the content of the URL asynchronously using aiohttp."""
-    try:
-        async with session.get(url) as response:
-            response.raise_for_status()  # Lanza una excepción para respuestas de error
-            return await response.text()  # Devuelve el contenido de la respuesta
-    except aiohttp.ClientError as e:
-        return {"error": f"Failed to fetch {url}: {str(e)}"}  # Manejo de errores de cliente HTTP
-    except Exception as e:
-        return {"error": f"An unexpected error occurred: {str(e)}"}  # Manejo de errores inesperados
-
-class BatchRequest(BaseModel):
-    domain: str
-    batch_size: int = 50
-    start: int = 0   # valor por defecto para iniciar, asegura que siempre tenga un valor
-
 @app.post("/process_urls_in_batches")
-async def process_urls_in_batches():
-    sitemap_url = "https://aulacm.com/sitemap_index.xml"
+async def process_urls_in_batches(request: BatchRequest):
+    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
+    print(f"Fetching URLs from: {sitemap_url}")
+    
     try:
-        response = await app.state.client.get(sitemap_url)
-        response.raise_for_status()
-        # Aquí deberías procesar el sitemap y extraer las URLs
-        urls = []  # Supongamos que esta es tu lista de URLs extraídas
-        return JSONResponse(content={"status": "success", "urls": urls, "count": len(urls)})
-    except httpx.RequestError as exc:
-        return JSONResponse(status_code=500, content={"message": "Error fetching sitemap", "error": str(exc)})
-    except httpx.HTTPStatusError as exc:
-        return JSONResponse(status_code=exc.response.status_code, content={"message": "Error with sitemap response", "error": str(exc.response.status_text)})
+        urls = await fetch_sitemap(app.state.client, sitemap_url, app.state.redis)
+    except Exception as e:
+        print(f"Failed to fetch sitemap: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch sitemap")
 
-def extract_urls_from_sitemap(sitemap_contents: dict) -> List[str]:
-    urls = []
-    if 'sitemapindex' in sitemap_contents:
-        for sitemap in sitemap_contents['sitemapindex'].get('sitemap', []):
-            urls.append(sitemap['loc'])
-    elif 'urlset' in sitemap_contents:
-        urls = [url['loc'] for url in sitemap_contents['urlset'].get('url', [])]
-    return urls
+    if not urls:
+        print("No URLs found in the sitemap.")
+        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
+    
+    print(f"Total URLs fetched for processing: {len(urls)}")
+    urls_to_process = urls[request.start:request.start + request.batch_size]
+    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
-async def fetch_sitemap(url: str, client: httpx.AsyncClient, redis_client) -> Optional[List[str]]:
+    tasks = [analyze_url(url, app.state.client, app.state.redis) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
+    print(f"Results received: {results}")
+
+    valid_results = [{
+        "url": result['url'],
+        "title": result.get('title', "No title provided"),
+        "main_keyword": result.get('main_keyword', "Keyword not specified"),
+        "secondary_keywords": result.get('secondary_keywords', []),
+        "semantic_search_intent": result.get('semantic_search_intent', "Intent not specified")
+    } for result in results if result]
+
+    print(f"Filtered results: {valid_results}")
+
+    next_start = request.start + len(urls_to_process)
+    more_batches = next_start < len(urls)
+    print(f"More batches: {more_batches}, Next batch start index: {next_start}")
+
+    return {
+        "processed_urls": valid_results,
+        "more_batches": more_batches,
+        "next_batch_start": next_start if more_batches else None
+    }
+
+async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout(5.0, read=150.0)):
     redis_key = f"sitemap:{url}"
+    cached_sitemap = await redis_client.get(redis_key)
+    if cached_sitemap:
+        print(f"Cache hit for sitemap at {url}")
+        cached_data = json.loads(cached_sitemap)
+        if not cached_data:
+            print("Cached sitemap data is empty, refetching...")
+        else:
+            return cached_data  # Utilizar los datos del caché si están presentes y son válidos
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
     }
 
-    cached_sitemap = await redis_client.get(redis_key)
-    if cached_sitemap:
-        return json.loads(cached_sitemap)
-
     try:
-        response = await client.get(url, headers=headers, timeout=CLIENT_TIMEOUT)
+        response = await client.get(url, headers=headers, timeout=timeout_config)
         if response.status_code != 200:
-            response = await client.get(url, headers=headers, timeout=CLIENT_TIMEOUT)  # Retry once
+            print(f"HTTP status code {response.status_code} received for {url}, retrying...")
+            response = await client.get(url, headers=headers, timeout=timeout_config)  # Retry once if non-200 received
             if response.status_code != 200:
-                raise HTTPException(status_code=response.status_code, detail=f"Sitemap not found at {url}")
-        
+                print(f"Failed to fetch sitemap after retry for {url}: {response.status_code}")
+                return None
+
         sitemap_contents = xmltodict.parse(response.content)
-        urls = extract_urls_from_sitemap(sitemap_contents)
+        all_urls = []
 
-        if urls:
-            await redis_client.set(redis_key, json.dumps(urls), ex=86400)  # 24-hour cache expiration
-        return urls
+        if 'sitemapindex' in sitemap_contents:
+            sitemap_indices = sitemap_contents.get('sitemapindex', {}).get('sitemap', [])
+            sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
+            for sitemap in sitemap_indices:
+                sitemap_url = sitemap.get('loc')
+                child_urls = await fetch_sitemap(client, sitemap_url, redis_client, timeout_config)
+                if child_urls:
+                    all_urls.extend(child_urls)
+        elif 'urlset' in sitemap_contents:
+            urls = [url.get('loc') for url in sitemap_contents.get('urlset', {}).get('url', [])]
+            all_urls.extend(urls)  # Directly add since they are final URLs
+
+        if all_urls:
+            await redis_client.set(redis_key, json.dumps(all_urls), ex=86400)  # 24-hour cache expiration
+            print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
+        else:
+            print(f"No URLs found in the sitemap at {url}. Not caching empty result.")
+            return None
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/fetch-sitemap/{url}")
-async def api_fetch_sitemap(url: str):
-    async with httpx.AsyncClient() as client, aioredis.from_url(REDIS_URL) as redis_client:
-        urls = await fetch_sitemap(url, client, redis_client)
-        return {"urls": urls}
-
-async def fetch_urls_from_sitemap(sitemap_url: str) -> List[str]:
-    """Fetch URLs from a given sitemap XML using lxml for parsing."""
-    async with aiohttp.ClientSession() as session:
-        sitemap_content = await fetch(sitemap_url, session)  # Utiliza fetch para obtener el contenido del sitemap
-        if isinstance(sitemap_content, dict) and "error" in sitemap_content:
-            return sitemap_content  # Retorna el error si fetch falló
-        try:
-            xml_root = etree.fromstring(sitemap_content)
-            urls = [url.text for url in xml_root.xpath('//url/loc')]  # Extrae las URLs usando XPath
-            return urls
-        except etree.XMLSyntaxError as e:
-            return {"error": f"Failed to parse XML from {sitemap_url}: {str(e)}"}  # Manejo de errores de sintaxis XML
+        print(f"Exception occurred while fetching sitemap from {url}: {e}")
+        return None
+    return all_urls
 
 async def fetch_url(client, url, timeout_config, max_redirects=5):
     current_url = url
@@ -230,7 +183,7 @@ async def fetch_url(client, url, timeout_config, max_redirects=5):
 async def test_redirect():
     client = app.state.client  # Utiliza el cliente HTTP almacenado en el estado de la app
     url = 'http://example.com/some-redirect-url'
-    timeout_config = Timeout(10.0, read=60.0)  # Configura los tiempos de espera apropiadamente
+    timeout_config = Timeout(5.0, read=30.0)  # Configura los tiempos de espera apropiadamente
 
     try:
         final_url = await fetch_url(client, url, timeout_config)
@@ -453,67 +406,47 @@ def find_meta_description(soup: BeautifulSoup) -> str:
     return "No description available"
 
 async def analyze_url(url: str, client: httpx.AsyncClient, redis_client: Redis) -> dict:
-    """Analyze the given URL and extract SEO relevant data asynchronously."""
-    # Skip URL if it is an image
-    if url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp')):
-        print(f"Skipping image URL: {url}")
-        return None
+    redis_key = f"url_analysis:{url}"
+    cached_result = await redis_client.get(redis_key)
+    if cached_result:
+        print(f"Cache hit for URL: {url}")
+        return json.loads(cached_result)
 
-    # Check the status of the URL before processing to ensure it's a page with status 200
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
+    }
     try:
-        response = await client.head(url)
+        response = await client.get(url, headers=headers)
         if response.status_code != 200:
-            print(f"Skipping URL due to non-200 status: {url} with status {response.status_code}")
-            return None
-
-        # Use cache to avoid repeated processing
-        redis_key = f"url_analysis:{url}"
-        cached_result = await redis_client.get(redis_key)
-        if cached_result:
-            print(f"Cache hit for URL: {url}")
-            return json.loads(cached_result)
-
-        # Perform GET request if URL is not in cache or needs updating
-        response = await client.get(url)
-        if response.status_code != 200:
-            print(f"Failed to fetch URL {url} with status {response.status_code}, skipping...")
+            print(f"Skipping URL due to non-200 status code: {url} with status {response.status_code}")
             return None
 
         soup = BeautifulSoup(response.content, 'html.parser')
+        slug = extract_slug(url)
         title = soup.title.text if soup.title else "No title"
         meta_description = find_meta_description(soup)
         h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
         h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
         text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
 
-        # Extract keywords and slug
-        slug = extract_slug(url)
-        refined_keywords = refine_keywords(f"{title} {' '.join(h1s)} {' '.join(h2s)} {text_relevant}")
-        keyword_density = calculate_keyword_density(text_relevant, refined_keywords)
+        main_keyword = slug
+        secondary_keywords = find_keywords(title, h1s, h2s, text_relevant, exclude=[slug])
+        semantic_search_intent = calculate_semantic_search_intent(main_keyword, secondary_keywords)
 
-        # Store and return results
         result = {
             "url": url,
-            "status": response.status_code,
             "title": title,
             "meta_description": meta_description,
-            "h1s": h1s,
-            "h2s": h2s,
-            "slug": slug,
-            "refined_keywords": refined_keywords,
-            "keyword_density": keyword_density
+            "main_keyword": main_keyword,
+            "secondary_keywords": secondary_keywords,
+            "semantic_search_intent": semantic_search_intent
         }
 
-        # Cache the result
-        await redis_client.set(redis_key, json.dumps(result), ex=86400)  # Cache for 24 hours
+        await redis_client.set(redis_key, json.dumps(result), ex=86400)
         return result
-
-    except httpx.RequestError as e:
-        print(f"Request error for {url}: {str(e)}")
-        return {"error": f"Request failed for {url}: {str(e)}"}
     except Exception as e:
-        print(f"An error occurred while processing {url}: {str(e)}")
-        return {"error": f"Processing failed for {url}: {str(e)}"}
+        print(f"Error processing URL {url}: {e}")
+        return None
 
 def calculate_semantic_search_intent(main_keyword, secondary_keywords):
     # Combine main and secondary keywords with given weights
@@ -606,7 +539,274 @@ def test_api():
     except Exception as e:
         print(str(e))
 
-app.include_router(router)
+
+
+#################### ENLACES INTERNOS
+
+@app.post("/internal_links_analysis")
+async def internal_links_analysis(request: Request):
+    body = await request.json()
+    domain = body['domain']  # Asumiendo que se envía JSON con un dominio
+    return await analyze_internal_links(domain)
+
+async def analyze_internal_links(domain: str):
+    processed_data = await get_processed_data_from_storage(domain, app.state.redis)
+
+    internal_links = []
+    for item in processed_data:
+        internal_links.extend(find_internal_links(item))
+
+    seo_recommendations = calculate_seo_recommendations(internal_links)
+
+    return {"internal_links": internal_links, "seo_recommendations": seo_recommendations}
+
+def find_internal_links(data):
+    """
+    Encuentra enlaces internos en el contenido de una página y devuelve una lista de ellos.
+    """
+    internal_links = []
+    # Aquí puedes implementar la lógica para encontrar los enlaces internos en el contenido HTML de la página
+    # Por ahora, simularemos algunos enlaces internos
+    internal_links.append({"url": "https://example.com/page1", "anchor_text": "Page 1"})
+    internal_links.append({"url": "https://example.com/page2", "anchor_text": "Page 2"})
+    internal_links.append({"url": "https://example.com/page3", "anchor_text": "Page 3"})
+    return internal_links
+
+def calculate_seo_recommendations(internal_links):
+    """
+    Calcula recomendaciones de SEO para los enlaces internos dados.
+    """
+    seo_recommendations = []
+    for link in internal_links:
+        anchor_text = link['anchor_text']
+        url = link['url']
+        keyword_density = calculate_keyword_density(anchor_text, ['keyword'])  # Reemplaza 'keyword' por tu palabra clave principal
+        semantic_similarity = calculate_semantic_similarity(anchor_text, url)  # Calcula la similitud semántica entre el texto ancla y la URL
+        recommendation = {"url": url, "anchor_text": anchor_text, "keyword_density": keyword_density, "semantic_similarity": semantic_similarity}
+        seo_recommendations.append(recommendation)
+    return seo_recommendations
+
+def calculate_semantic_similarity(anchor_text, url):
+    """
+    Calcula la similitud semántica entre el texto ancla y la URL.
+    Puedes implementar una lógica más avanzada aquí basada en el análisis de contenido.
+    """
+    # Por ahora, simplemente devolvemos una puntuación aleatoria entre 0 y 1
+    return random.random()
+
+async def get_processed_data_from_storage(domain: str, redis_client: Redis):
+    # Aquí iría la lógica real para obtener los datos procesados del almacenamiento
+    # Por ahora, simplemente devolvemos una lista vacía como placeholder
+    return []
+
+
+####################
+
+
+#################### CONTENIDO DUPLICADO
+
+def calculate_similarity(text1: str, text2: str) -> float:
+    """
+    Calcula la similitud entre dos textos utilizando el coeficiente de similitud de secuencia.
+    """
+    return SequenceMatcher(None, text1, text2).ratio()
+
+async def find_duplicate_content(urls: List[str], client: httpx.AsyncClient, redis_client: Redis) -> Dict[str, List[str]]:
+    """
+    Encuentra contenido duplicado entre un conjunto de URLs.
+    """
+    duplicate_content = {}
+    for i, url1 in enumerate(urls):
+        for j, url2 in enumerate(urls):
+            if i != j and (url1, url2) not in duplicate_content:
+                # Verifica si ya hemos calculado la similitud entre estos dos URLs
+                cached_similarity = await redis_client.get(f"duplicate_content:{url1}_{url2}")
+                if cached_similarity:
+                    similarity = float(cached_similarity)
+                else:
+                    # Si no está en el caché, obtén el contenido de ambas URL y calcula la similitud
+                    content1, content2 = await fetch_page_content(client, url1), await fetch_page_content(client, url2)
+                    similarity = calculate_similarity(content1, content2)
+                    # Almacena la similitud en el caché para futuras referencias
+                    await redis_client.set(f"duplicate_content:{url1}_{url2}", str(similarity), ex=86400)
+                
+                # Si la similitud supera un umbral, consideramos que el contenido es duplicado
+                if similarity > 0.9:  # Umbral arbitrario
+                    if url1 not in duplicate_content:
+                        duplicate_content[url1] = [url2]
+                    else:
+                        duplicate_content[url1].append(url2)
+    return duplicate_content
+
+async def fetch_page_content(client: httpx.AsyncClient, url: str) -> str:
+    """
+    Obtiene el contenido de una URL.
+    """
+    try:
+        response = await client.get(url)
+        if response.status_code == 200:
+            return response.text
+        else:
+            print(f"Failed to fetch content for URL {url}, status code: {response.status_code}")
+            return ""
+    except Exception as e:
+        print(f"Error fetching content for URL {url}: {e}")
+        return ""
+
+@app.post("/analyze_duplicate_content")
+async def analyze_duplicate_content(request: BatchRequest):
+    try:
+        urls = await fetch_sitemap_urls(request.domain)
+        if not urls:
+            raise HTTPException(status_code=404, detail="No URLs found in the sitemap.")
+        
+        duplicate_content = await find_duplicate_content(urls, app.state.client, app.state.redis)
+        return duplicate_content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+####################
+
+
+#################### THIN CONTENT
+
+async def analyze_thin_content(url_data):
+    thin_content_urls = []
+    for url, content_data in url_data.items():
+        # Verificar si cumple con los criterios para ser considerado thin content
+        if not content_data.get('h2_count') or content_data['h2_count'] <= 1:
+            thin_content_urls.append(url)
+        elif len(content_data.get('title', '')) < 30:
+            thin_content_urls.append(url)
+        elif len(content_data.get('meta_description', '')) < 80:
+            thin_content_urls.append(url)
+        elif not contains_semantic_words(content_data.get('slug', '')):
+            thin_content_urls.append(url)
+        elif not content_data.get('relevant_content'):
+            thin_content_urls.append(url)
+    return thin_content_urls
+
+def contains_semantic_words(slug):
+    # Podrías agregar lógica más sofisticada aquí según tus necesidades
+    # Por ahora, simplemente verificamos si el slug contiene alguna letra
+    return any(char.isalpha() for char in slug)
+
+@app.post("/analyze_thin_content")
+async def analyze_thin_content_endpoint(request: BatchRequest):
+    try:
+        urls = await fetch_sitemap_urls(request.domain)
+        if not urls:
+            raise HTTPException(status_code=404, detail="No URLs found in the sitemap.")
+        
+        url_data = await analyze_urls_content(urls, app.state.client, app.state.redis)
+        thin_content_urls = await analyze_thin_content(url_data)
+        return thin_content_urls
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+####################
+
+
+#################### 404
+
+@app.post("/handle_404_urls")
+async def handle_404_urls(request: Request, domain: str, batch_size: Optional[int] = 50):
+    redis_client: Redis = request.state.redis
+    try:
+        print(f"Handling 404 URLs for domain: {domain}")
+
+        # Obtener todas las URLs que devolvieron un código de estado 404
+        urls_to_handle = await get_404_urls(domain, batch_size, redis_client)
+        if not urls_to_handle:
+            raise HTTPException(status_code=404, detail=f"No 404 URLs found for domain: {domain}")
+
+        # Procesar las URLs 404 encontradas según sea necesario (por ejemplo, notificar al administrador del sitio, guardarlas para su posterior revisión, etc.)
+        # Aquí se puede agregar la lógica de manejo de URLs 404
+
+        return {"message": f"{len(urls_to_handle)} 404 URLs found and processed for domain: {domain}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+async def get_404_urls(domain: str, batch_size: int, redis_client: Redis):
+    redis_key = f"404_urls:{domain}"
+    cached_urls = await redis_client.get(redis_key)
+    if cached_urls:
+        print(f"Cache hit for 404 URLs of domain {domain}")
+        cached_data = json.loads(cached_urls)
+        if not cached_data:
+            print("Cached 404 URLs data is empty, refetching...")
+        else:
+            return cached_data  # Utilizar los datos del caché si están presentes y son válidos
+
+    # Aquí puedes realizar una búsqueda en el almacenamiento de los datos generados por process_urls_in_batches para obtener las URLs 404 registradas para el dominio dado
+    # Por ahora, simplemente devolveremos una lista vacía como si no se encontraran URLs 404
+    return []
+
+####################
+
+
+#################### 301
+
+async def suggest_301_redirects(urls_with_duplicates: Dict[str, List[str]]) -> Dict[str, str]:
+    """
+    Sugiere redirecciones 301 para URLs con contenido duplicado.
+    """
+    redirections = {}
+    for canonical_url, duplicate_urls in urls_with_duplicates.items():
+        # Elige una URL duplicada para redireccionar
+        url_to_redirect = duplicate_urls[0]  # Puedes elegir cualquier lógica para esto
+
+        # Genera la regla de redirección 301
+        redirection_rule = f"Redirect 301 {url_to_redirect} {canonical_url}"
+        redirections[canonical_url] = redirection_rule
+
+    return redirections
+
+@app.post("/recommended_301_redirects")
+async def recommended_301_redirects(request: Dict[str, List[str]]):
+    """
+    Endpoint para obtener recomendaciones de redirecciones 301.
+    """
+    try:
+        urls_with_duplicates = request['urls_with_duplicates']
+        suggested_redirects = await suggest_301_redirects(urls_with_duplicates)
+        return suggested_redirects
+    except KeyError:
+        raise HTTPException(status_code=400, detail="Invalid request format. 'urls_with_duplicates' key not found.")
+
+####################
+
+
+#################### WPO
+
+def analyze_wpo(url):
+    try:
+        # Realizar la solicitud HTTP para obtener el contenido de la página
+        response = requests.get(url)
+        response.raise_for_status()  # Lanza una excepción si la solicitud falla
+
+        # Analizar el HTML de la página usando BeautifulSoup
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        # Ejemplo de métricas que podrías recopilar
+        title = soup.title.string  # Título de la página
+        page_size = len(response.content) / 1024  # Tamaño de la página en kilobytes
+        load_time = response.elapsed.total_seconds()  # Tiempo de carga de la página en segundos
+
+        # Puedes agregar más métricas según tus necesidades
+
+        # Retornar las métricas recopiladas como un diccionario
+        return {
+            'title': title,
+            'page_size_kb': page_size,
+            'load_time_seconds': load_time
+            # Agrega más métricas aquí si lo deseas
+        }
+    except Exception as e:
+        raise RuntimeError(f"No se pudo analizar el WPO de {url}: {e}")
+
+####################
+
 
 if __name__ == "__main__":
     import sys
