@@ -72,10 +72,15 @@ async def health_check():
 
 @app.get("/external-health")
 async def external_health_check():
-    # Esta función podría expandirse para verificar otros componentes internos si es necesario
-    return {"status": "ok"}
-
-
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get('http://localhost:10000/health') as response:
+                if response.status == 200:
+                    return {"status": "ok"}
+                else:
+                    return {"status": "external service error", "code": response.status}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # Middleware para manejar la conexión de Redis
 class RedisMiddleware(BaseHTTPMiddleware):
@@ -93,15 +98,14 @@ async def startup_event():
 
 @app.get("/preheat")
 async def preheat():
-    # URL del sitemap principal
-    sitemap_url = "https://aulacm.com/sitemap_index.xml"
+    """Preheat the application by loading essential components."""
     try:
-        urls = await fetch_sitemap(app.state.client, sitemap_url, app.state.redis)
-        if not urls:
-            raise HTTPException(status_code=404, detail="No URLs found in the initial sitemap.")
-        return {"status": "success", "message": "Preheat completed", "url_count": len(urls)}
+        async with aiohttp.ClientSession() as session:
+            # Realiza llamadas a endpoints críticos para cargar configuraciones o datos necesarios
+            await fetch('http://example.com/homepage', session)  # Cambia la URL según necesidad
+        return {"status": "Preheat successful"}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Preheat failed: {str(e)}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -117,7 +121,18 @@ async def root(request: Request):
     value = await redis_client.get("key")
     return {"hello": "world", "key": value}
 
-@app.post("/process_urls_in_batches")
+async def fetch(url: str, session: aiohttp.ClientSession) -> str:
+    """Fetch the content of the URL asynchronously using aiohttp."""
+    try:
+        async with session.get(url) as response:
+            response.raise_for_status()  # Lanza una excepción para respuestas de error
+            return await response.text()  # Devuelve el contenido de la respuesta
+    except aiohttp.ClientError as e:
+        return {"error": f"Failed to fetch {url}: {str(e)}"}  # Manejo de errores de cliente HTTP
+    except Exception as e:
+        return {"error": f"An unexpected error occurred: {str(e)}"}  # Manejo de errores inesperados
+
+@router.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
     print(f"Fetching URLs from: {sitemap_url}")
@@ -212,6 +227,19 @@ async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout
     except Exception as e:
         print(f"Exception occurred while fetching sitemap from {url}: {e}")
         return None
+
+async def fetch_urls_from_sitemap(sitemap_url: str) -> List[str]:
+    """Fetch URLs from a given sitemap XML using lxml for parsing."""
+    async with aiohttp.ClientSession() as session:
+        sitemap_content = await fetch(sitemap_url, session)  # Utiliza fetch para obtener el contenido del sitemap
+        if isinstance(sitemap_content, dict) and "error" in sitemap_content:
+            return sitemap_content  # Retorna el error si fetch falló
+        try:
+            xml_root = etree.fromstring(sitemap_content)
+            urls = [url.text for url in xml_root.xpath('//url/loc')]  # Extrae las URLs usando XPath
+            return urls
+        except etree.XMLSyntaxError as e:
+            return {"error": f"Failed to parse XML from {sitemap_url}: {str(e)}"}  # Manejo de errores de sintaxis XML
 
 async def fetch_url(client, url, timeout_config, max_redirects=5):
     current_url = url
@@ -470,54 +498,67 @@ def find_meta_description(soup: BeautifulSoup) -> str:
     return "No description available"
 
 async def analyze_url(url: str, client: httpx.AsyncClient, redis_client: Redis) -> dict:
-    # Saltar URL si es una imagen
+    """Analyze the given URL and extract SEO relevant data asynchronously."""
+    # Skip URL if it is an image
     if url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp')):
         print(f"Skipping image URL: {url}")
         return None
 
-    # Revisar estado de la URL antes de procesar para asegurar que es una página con status 200
-    response = await client.head(url)
-    if response.status_code != 200:
-        print(f"Skipping URL due to non-200 status: {url} with status {response.status_code}")
-        return None
+    # Check the status of the URL before processing to ensure it's a page with status 200
+    try:
+        response = await client.head(url)
+        if response.status_code != 200:
+            print(f"Skipping URL due to non-200 status: {url} with status {response.status_code}")
+            return None
 
-    # Usar caché para evitar procesamiento repetido
-    redis_key = f"url_analysis:{url}"
-    cached_result = await redis_client.get(redis_key)
-    if cached_result:
-        print(f"Cache hit for URL: {url}")
-        return json.loads(cached_result)
+        # Use cache to avoid repeated processing
+        redis_key = f"url_analysis:{url}"
+        cached_result = await redis_client.get(redis_key)
+        if cached_result:
+            print(f"Cache hit for URL: {url}")
+            return json.loads(cached_result)
 
-    # Realizar petición GET si el URL no está en caché o necesita actualización
-    response = await client.get(url)
-    if response.status_code != 200:
-        print(f"Failed to fetch URL {url} with status {response.status_code}, skipping...")
-        return None
+        # Perform GET request if URL is not in cache or needs updating
+        response = await client.get(url)
+        if response.status_code != 200:
+            print(f"Failed to fetch URL {url} with status {response.status_code}, skipping...")
+            return None
 
-    soup = BeautifulSoup(response.content, 'html.parser')
-    title = soup.title.text if soup.title else "No title"
-    meta_description = find_meta_description(soup)
-    h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
-    h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
-    text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
+        soup = BeautifulSoup(response.content, 'html.parser')
+        title = soup.title.text if soup.title else "No title"
+        meta_description = find_meta_description(soup)
+        h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
+        h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
+        text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
 
-    # Extraer palabras clave y slug
-    slug = extract_slug(url)
-    refined_keywords = refine_keywords(f"{title} {' '.join(h1s)} {' '.join(h2s)} {text_relevant}")
-    keyword_density = calculate_keyword_density(text_relevant, refined_keywords)
+        # Extract keywords and slug
+        slug = extract_slug(url)
+        refined_keywords = refine_keywords(f"{title} {' '.join(h1s)} {' '.join(h2s)} {text_relevant}")
+        keyword_density = calculate_keyword_density(text_relevant, refined_keywords)
 
-    # Almacenar y devolver resultados
-    result = {
-        "url": url,
-        "status": response.status_code,
-        "title": title,
-        "meta_description": meta_description,
-        "h1s": h1s,
-        "h2s": h2s,
-        "slug": slug,
-        "refined_keywords": refined_keywords,
-        "keyword_density": keyword_density
-    }
+        # Store and return results
+        result = {
+            "url": url,
+            "status": response.status_code,
+            "title": title,
+            "meta_description": meta_description,
+            "h1s": h1s,
+            "h2s": h2s,
+            "slug": slug,
+            "refined_keywords": refined_keywords,
+            "keyword_density": keyword_density
+        }
+
+        # Cache the result
+        await redis_client.set(redis_key, json.dumps(result), ex=86400)  # Cache for 24 hours
+        return result
+
+    except httpx.RequestError as e:
+        print(f"Request error for {url}: {str(e)}")
+        return {"error": f"Request failed for {url}: {str(e)}"}
+    except Exception as e:
+        print(f"An error occurred while processing {url}: {str(e)}")
+        return {"error": f"Processing failed for {url}: {str(e)}"}
 
 def calculate_semantic_search_intent(main_keyword, secondary_keywords):
     # Combine main and secondary keywords with given weights
