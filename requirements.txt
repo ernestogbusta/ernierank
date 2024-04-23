@@ -6,3 +6,4 @@ pydantic==1.10.14
 uvicorn==0.18.2
 starlette==0.37.2
 redis==5.0.3
+python-dotenv==1.0.1
