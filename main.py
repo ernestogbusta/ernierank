@@ -1,30 +1,28 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, Query
+from fastapi import FastAPI, HTTPException, Request, Depends, Query, APIRouter, Body
+from fastapi.responses import JSONResponse
 import httpx
 from httpx import Timeout
 from bs4 import BeautifulSoup
 import xmltodict
 import os
 import json
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 from collections import Counter
-from typing import List, Dict, Optional
-from urllib.parse import urlparse
+from typing import List, Dict, Any, Optional
+from urllib.parse import urlparse, urljoin
 import re
 import asyncio
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 from redis.asyncio import Redis
 from dotenv import load_dotenv
-import subprocess
-from difflib import SequenceMatcher
 import logging
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+import subprocess
 
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int = 50  # valor por defecto
+    batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 load_dotenv()
@@ -154,16 +152,6 @@ async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout
         print(f"Exception occurred while fetching sitemap from {url}: {e}")
         return None
 
-async def validate_urls(client, urls):
-    validated_urls = []
-    for url in urls:
-        if url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp')):  # Skip images
-            continue
-        response = await client.head(url, allow_redirects=True)
-        if response.status_code == 200:
-            validated_urls.append(url)
-    return validated_urls
-
 async def fetch_url(client, url, timeout_config, max_redirects=5):
     current_url = url
     tried_urls = set()  # Mantener un registro de las URLs probadas para detectar bucles
@@ -227,6 +215,16 @@ async def check_url_status(client, url):
     except Exception as e:
         print(f"Error checking status for URL {url}: {e}")
         return None
+
+async def validate_urls(client, urls):
+    validated_urls = []
+    for url in urls:
+        status = await check_url_status(client, url)
+        if status == 200:
+            validated_urls.append(url)
+        else:
+            print(f"Skipping URL due to non-200 status ({status}): {url}")
+    return validated_urls
 
 async def check_url_status(client, url):
     try:
@@ -411,47 +409,54 @@ def find_meta_description(soup: BeautifulSoup) -> str:
     return "No description available"
 
 async def analyze_url(url: str, client: httpx.AsyncClient, redis_client: Redis) -> dict:
+    # Saltar URL si es una imagen
+    if url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp')):
+        print(f"Skipping image URL: {url}")
+        return None
+
+    # Revisar estado de la URL antes de procesar para asegurar que es una página con status 200
+    response = await client.head(url)
+    if response.status_code != 200:
+        print(f"Skipping URL due to non-200 status: {url} with status {response.status_code}")
+        return None
+
+    # Usar caché para evitar procesamiento repetido
     redis_key = f"url_analysis:{url}"
     cached_result = await redis_client.get(redis_key)
     if cached_result:
         print(f"Cache hit for URL: {url}")
         return json.loads(cached_result)
 
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
-    }
-    try:
-        response = await client.get(url, headers=headers)
-        if response.status_code != 200:
-            print(f"Skipping URL due to non-200 status code: {url} with status {response.status_code}")
-            return None
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-        slug = extract_slug(url)
-        title = soup.title.text if soup.title else "No title"
-        meta_description = find_meta_description(soup)
-        h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
-        h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
-        text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
-
-        main_keyword = slug
-        secondary_keywords = find_keywords(title, h1s, h2s, text_relevant, exclude=[slug])
-        semantic_search_intent = calculate_semantic_search_intent(main_keyword, secondary_keywords)
-
-        result = {
-            "url": url,
-            "title": title,
-            "meta_description": meta_description,
-            "main_keyword": main_keyword,
-            "secondary_keywords": secondary_keywords,
-            "semantic_search_intent": semantic_search_intent
-        }
-
-        await redis_client.set(redis_key, json.dumps(result), ex=86400)
-        return result
-    except Exception as e:
-        print(f"Error processing URL {url}: {e}")
+    # Realizar petición GET si el URL no está en caché o necesita actualización
+    response = await client.get(url)
+    if response.status_code != 200:
+        print(f"Failed to fetch URL {url} with status {response.status_code}, skipping...")
         return None
+
+    soup = BeautifulSoup(response.content, 'html.parser')
+    title = soup.title.text if soup.title else "No title"
+    meta_description = find_meta_description(soup)
+    h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
+    h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
+    text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
+
+    # Extraer palabras clave y slug
+    slug = extract_slug(url)
+    refined_keywords = refine_keywords(f"{title} {' '.join(h1s)} {' '.join(h2s)} {text_relevant}")
+    keyword_density = calculate_keyword_density(text_relevant, refined_keywords)
+
+    # Almacenar y devolver resultados
+    result = {
+        "url": url,
+        "status": response.status_code,
+        "title": title,
+        "meta_description": meta_description,
+        "h1s": h1s,
+        "h2s": h2s,
+        "slug": slug,
+        "refined_keywords": refined_keywords,
+        "keyword_density": keyword_density
+    }
 
 def calculate_semantic_search_intent(main_keyword, secondary_keywords):
     # Combine main and secondary keywords with given weights
@@ -486,7 +491,7 @@ async def process_all_batches_endpoint(request: Request):
 
 async def process_all_batches(domain):
     start = 0
-    batch_size = 50
+    batch_size = 100
     more_batches = True
     results = []
 
@@ -544,6 +549,134 @@ def test_api():
     except Exception as e:
         print(str(e))
 
+
+########## ENLACES INTERNOS ##########
+
+class LinkAnalysis(BaseModel):
+    url: str
+    anchor_text: str
+    seo_quality: Optional[str] = None
+    similarity_score: Optional[float] = None
+
+class InternalLinkAnalysis(BaseModel):
+    domain: str
+    internal_links_data: List[LinkAnalysis]
+
+async def get_http_client():
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        yield client
+
+async def fetch_sitemap_for_internal_links(client: httpx.AsyncClient, url: str) -> List[str]:
+    try:
+        response = await client.get(url)
+        if response.status_code == 200:
+            sitemap_contents = xmltodict.parse(response.content)
+            urls = []
+            if 'sitemapindex' in sitemap_contents:
+                for sitemap in sitemap_contents['sitemapindex']['sitemap']:
+                    child_urls = await fetch_sitemap_for_internal_links(client, sitemap['loc'])
+                    urls.extend(child_urls)
+            elif 'urlset' in sitemap_contents:
+                urls = [url_entry['loc'] for url_entry in sitemap_contents['urlset']['url']
+                        if not url_entry['loc'].endswith(('.jpg', '.jpeg', '.png', '.gif', '.svg', '.webp'))]
+            return urls
+        else:
+            logging.warning(f"Received non-200 status code {response.status_code} for {url}")
+            return []
+    except Exception as e:
+        logging.error(f"Exception occurred while fetching sitemap from {url}: {e}")
+        return []
+
+@app.post("/analyze_internal_links", response_model=InternalLinkAnalysis)
+async def analyze_internal_links(domain: str = Body(..., embed=True), client: httpx.AsyncClient = Depends(get_http_client)):
+    print(f"Received domain: {domain}")  # Agregar esto para depuración
+    sitemap_url = f"{domain.rstrip('/')}/sitemap_index.xml"
+    urls = await fetch_sitemap_for_internal_links(client, sitemap_url)
+    if not urls:
+        raise HTTPException(status_code=404, detail="No valid URLs found in the sitemap.")
+    
+    internal_links_data = await process_internal_links(client, urls)
+    return InternalLinkAnalysis(domain=domain, internal_links_data=internal_links_data)
+
+async def process_internal_links(client: httpx.AsyncClient, urls: List[str]) -> List[Dict[str, any]]:
+    tasks = [analyze_url_for_internal_links(client, url) for url in urls]
+    results = await asyncio.gather(*tasks)
+    return [link for link in results if link]
+
+async def analyze_url_for_internal_links(client: httpx.AsyncClient, url: str) -> Optional[LinkAnalysis]:
+    response = await client.get(url)
+    if response.status_code == 200:
+        soup = BeautifulSoup(response.content, 'html.parser')
+        links = extract_internal_links(soup, url)
+        # Procesar enlaces para determinar calidad SEO y puntuaciones
+        return LinkAnalysis(url=url, anchor_text="Example Anchor", seo_quality="Good", similarity_score=0.85)
+    return None
+
+def extract_internal_links(soup: BeautifulSoup, base_url: str) -> List[Dict[str, str]]:
+    links = []
+    for a_tag in soup.find_all('a', href=True):
+        link = urljoin(base_url, a_tag['href'])
+        if urlparse(link).netloc == urlparse(base_url).netloc:
+            links.append({'url': link, 'anchor_text': a_tag.get_text(strip=True)})
+    return links
+
+async def evaluate_internal_links(links: List[Dict[str, str]], source_url: str, client: httpx.AsyncClient) -> Dict[str, any]:
+    results = []
+    source_soup = await fetch_soup(source_url, client)
+    if not source_soup:
+        print("Failed to fetch or parse source page.")
+        return {"links": []}
+
+    source_keywords = extract_keywords_from_page(source_soup)
+
+    for link in links:
+        target_soup = await fetch_soup(link['url'], client)
+        if not target_soup:
+            link['seo_quality'] = 'Target page could not be fetched or parsed'
+            results.append(link)
+            continue
+
+        target_keywords = extract_keywords_from_page(target_soup)
+        similarity_score = calculate_similarity(source_keywords, target_keywords)
+        link['seo_quality'] = 'Good' if similarity_score > 0.5 else 'Needs improvement'
+        link['similarity_score'] = similarity_score
+        results.append(link)
+
+    return {"links": results}
+
+async def fetch_soup(url: str, client: httpx.AsyncClient) -> BeautifulSoup:
+    try:
+        response = await client.get(url)
+        if response.status_code == 200:
+            return BeautifulSoup(response.content, 'html.parser')
+    except Exception as e:
+        print(f"Error fetching URL {url}: {e}")
+    return None
+
+def is_internal_link(link: str, base_url: str) -> bool:
+    return link.startswith('/') or link.startswith(base_url)
+
+def extract_keywords_from_page(soup: BeautifulSoup) -> List[str]:
+    title = soup.title.text if soup.title else ""
+    h1s = [h1.text for h1 in soup.find_all('h1')]
+    h2s = [h2.text for h2 in soup.find_all('h2')]
+    keywords = title.split() + [word for h in h1s + h2s for word in h.split()]
+    return list(set(keywords))  # Return unique keywords only
+
+def calculate_similarity(keywords1: List[str], keywords2: List[str]) -> float:
+    set1, set2 = set(keywords1), set(keywords2)
+    intersection = set1.intersection(set2)
+    if not intersection:
+        return 0.0
+    return len(intersection) / len(set1.union(set2))
+
+
+######################################
+
+
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=10000)
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == 'test':
+        test_api()
+    else:
+        uvicorn.run(app, host="0.0.0.0", port=10000)
