@@ -18,43 +18,37 @@ from starlette.responses import Response
 from redis.asyncio import Redis
 from dotenv import load_dotenv
 import logging
+from logging.handlers import RotatingFileHandler
 import subprocess
+
+load_dotenv()
+app = FastAPI(title="ErnieRank API")
+
+@app.get("/")
+async def root():
+    logging.debug("Accediendo a la ruta raíz")
+    return {"message": "Hello World"}
+
+@app.on_event("startup")
+async def startup_event():
+    # Establecer conexión con Redis
+    app.state.redis = await Redis(decode_responses=True)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    # Cerrar conexión con Redis
+    await app.state.redis.close()
+
+@app.get("/some-route")
+async def some_route():
+    # Usar Redis para cachear o realizar alguna operación
+    value = await app.state.redis.get("some_key")
+    return {"value": value}
 
 class BatchRequest(BaseModel):
     domain: str
     batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
-
-load_dotenv()
-app = FastAPI(title="ErnieRank API")
-
-# Middleware para manejar la conexión de Redis
-class RedisMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        request.state.redis = app.state.redis
-        response = await call_next(request)
-        return response
-
-# Eventos de inicio y cierre para configurar y cerrar Redis
-@app.on_event("startup")
-async def startup_event():
-    timeout = Timeout(15.0, read=180.0)  # 15 segundos para conectar, 180 segundos para leer
-    app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-    app.state.client = httpx.AsyncClient(timeout=timeout)
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    await app.state.redis.close()
-    await app.state.client.aclose()  # Properly close the client
-
-app.add_middleware(RedisMiddleware)
-
-@app.get("/")
-async def root(request: Request):
-    redis_client = request.state.redis
-    await redis_client.set("key", "value")
-    value = await redis_client.get("key")
-    return {"hello": "world", "key": value}
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
@@ -577,17 +571,23 @@ class InternalLinkAnalysis(BaseModel):
 
 @app.post("/analyze_internal_links", response_model=InternalLinkAnalysis)
 async def analyze_internal_links(domain: str = Body(..., embed=True)):
-    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-        sitemap_url = f"{domain.rstrip('/')}/sitemap_index.xml"
-        urls = await fetch_sitemap_for_internal_links(client, sitemap_url)
-        if not urls:
-            raise HTTPException(status_code=404, detail="No valid URLs found in the sitemap.")
-        
-        internal_links_data = await process_internal_links(client, urls, domain)
-        if not internal_links_data:
-            raise HTTPException(status_code=404, detail="No internal links were processed or found.")
-        
-        return InternalLinkAnalysis(domain=domain, internal_links_data=internal_links_data)
+    try:
+        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+            sitemap_url = f"{domain.rstrip('/')}/sitemap_index.xml"
+            urls = await fetch_sitemap_for_internal_links(client, sitemap_url)
+            if not urls:
+                logging.error(f"No valid URLs found in sitemap: {sitemap_url}")
+                raise HTTPException(status_code=404, detail="No valid URLs found in the sitemap.")
+            
+            internal_links_data = await process_internal_links(client, urls, domain)
+            if not internal_links_data:
+                logging.error("No internal links were processed or found.")
+                raise HTTPException(status_code=404, detail="No internal links were processed or found.")
+            
+            return InternalLinkAnalysis(domain=domain, internal_links_data=internal_links_data)
+    except Exception as e:
+        logging.exception("Failed to analyze internal links")
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def fetch_sitemap_for_internal_links(client: httpx.AsyncClient, url: str) -> List[str]:
     try:
