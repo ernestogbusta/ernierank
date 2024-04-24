@@ -1,4 +1,4 @@
-#!/Users/ernestogarciabustamante/ernierank/mi_entorno_virtual/bin/python3
+#!/Users/ernestogarciabustamante/ernierank/mi_entorno_virtual/bin/python3.12
 # -*- coding: utf-8 -*-
 import re
 import sys

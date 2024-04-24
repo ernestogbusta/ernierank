@@ -24,6 +24,20 @@ import subprocess
 load_dotenv()
 app = FastAPI(title="ErnieRank API")
 
+class RedisMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Aquí puedes añadir lógica antes de la petición
+        response = await call_next(request)
+        # Aquí puedes añadir lógica después de la petición
+        return response
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logging.info(f"Handling request: {request.method} {request.url}")
+    response = await call_next(request)
+    logging.info(f"Request completed: {response.status_code}")
+    return response
+
 @app.get("/")
 async def root():
     logging.debug("Accediendo a la ruta raíz")
@@ -44,6 +58,15 @@ async def some_route():
     # Usar Redis para cachear o realizar alguna operación
     value = await app.state.redis.get("some_key")
     return {"value": value}
+
+app.add_middleware(RedisMiddleware)
+
+class RedisMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        redis_client = request.app.state.redis
+        # Puedes hacer algo con Redis aquí, como verificar una sesión
+        response = await call_next(request)
+        return response
 
 class BatchRequest(BaseModel):
     domain: str
@@ -571,23 +594,17 @@ class InternalLinkAnalysis(BaseModel):
 
 @app.post("/analyze_internal_links", response_model=InternalLinkAnalysis)
 async def analyze_internal_links(domain: str = Body(..., embed=True)):
-    try:
-        async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            sitemap_url = f"{domain.rstrip('/')}/sitemap_index.xml"
-            urls = await fetch_sitemap_for_internal_links(client, sitemap_url)
-            if not urls:
-                logging.error(f"No valid URLs found in sitemap: {sitemap_url}")
-                raise HTTPException(status_code=404, detail="No valid URLs found in the sitemap.")
-            
-            internal_links_data = await process_internal_links(client, urls, domain)
-            if not internal_links_data:
-                logging.error("No internal links were processed or found.")
-                raise HTTPException(status_code=404, detail="No internal links were processed or found.")
-            
-            return InternalLinkAnalysis(domain=domain, internal_links_data=internal_links_data)
-    except Exception as e:
-        logging.exception("Failed to analyze internal links")
-        raise HTTPException(status_code=500, detail=str(e))
+    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+        sitemap_url = f"{domain.rstrip('/')}/sitemap_index.xml"
+        urls = await fetch_sitemap_for_internal_links(client, sitemap_url)
+        if not urls:
+            raise HTTPException(status_code=404, detail="No valid URLs found in the sitemap.")
+        
+        internal_links_data = await process_internal_links(client, urls, domain)
+        if not internal_links_data:
+            raise HTTPException(status_code=404, detail="No internal links were processed or found.")
+        
+        return InternalLinkAnalysis(domain=domain, internal_links_data=internal_links_data)
 
 async def fetch_sitemap_for_internal_links(client: httpx.AsyncClient, url: str) -> List[str]:
     try:
