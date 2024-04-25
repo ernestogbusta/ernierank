@@ -1,6 +1,5 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, Query
+from fastapi import FastAPI, HTTPException, Request
 import httpx
-from httpx import Timeout
 from bs4 import BeautifulSoup
 import xmltodict
 import os
@@ -12,58 +11,31 @@ from typing import List, Dict, Optional
 from urllib.parse import urlparse
 import re
 import asyncio
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.responses import Response
-from redis.asyncio import Redis
-from dotenv import load_dotenv
-import subprocess
+
+app = FastAPI(title="ErnieRank API")
 
 class BatchRequest(BaseModel):
     domain: str
     batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
-load_dotenv()
-app = FastAPI(title="ErnieRank API")
-
-# Middleware para manejar la conexión de Redis
-class RedisMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        request.state.redis = app.state.redis
-        response = await call_next(request)
-        return response
-
-# Eventos de inicio y cierre para configurar y cerrar Redis
 @app.on_event("startup")
 async def startup_event():
-    timeout = Timeout(15.0, read=180.0)  # 15 segundos para conectar, 180 segundos para leer
-    app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
-    app.state.client = httpx.AsyncClient(timeout=timeout)
+    app.state.client = httpx.AsyncClient()
+    app.state.progress_file = "progress.json"
+    if not os.path.exists(app.state.progress_file):
+        with open(app.state.progress_file, 'w') as file:
+            json.dump({"current_index": 0, "urls": []}, file)
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    await app.state.redis.close()
-    await app.state.client.aclose()  # Properly close the client
-
-app.add_middleware(RedisMiddleware)
-
-@app.get("/")
-async def root(request: Request):
-    redis_client = request.state.redis
-    await redis_client.set("key", "value")
-    value = await redis_client.get("key")
-    return {"hello": "world", "key": value}
+    await app.state.client.aclose()
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
     print(f"Fetching URLs from: {sitemap_url}")
-    
-    try:
-        urls = await fetch_sitemap(app.state.client, sitemap_url, app.state.redis)
-    except Exception as e:
-        print(f"Failed to fetch sitemap: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch sitemap")
+    urls = await fetch_sitemap(app.state.client, sitemap_url)
 
     if not urls:
         print("No URLs found in the sitemap.")
@@ -73,18 +45,21 @@ async def process_urls_in_batches(request: BatchRequest):
     urls_to_process = urls[request.start:request.start + request.batch_size]
     print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
-    tasks = [analyze_url(url, app.state.client, app.state.redis) for url in urls_to_process]
+    tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
     results = await asyncio.gather(*tasks)
     print(f"Results received: {results}")
 
-    valid_results = [{
-        "url": result['url'],
-        "title": result.get('title', "No title provided"),
-        "main_keyword": result.get('main_keyword', "Keyword not specified"),
-        "secondary_keywords": result.get('secondary_keywords', []),
-        "semantic_search_intent": result.get('semantic_search_intent', "Intent not specified")
-    } for result in results if result]
-
+    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
+    valid_results = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "meta_description": result.get('meta_description', "No description provided"),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "secondary_keywords": result.get('secondary_keywords', []),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+        } for result in results if result
+    ]
     print(f"Filtered results: {valid_results}")
 
     next_start = request.start + len(urls_to_process)
@@ -97,138 +72,36 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout(10.0, read=60.0)):
-    redis_key = f"sitemap:{url}"
-    cached_sitemap = await redis_client.get(redis_key)
-    if cached_sitemap:
-        print(f"Cache hit for sitemap at {url}")
-        cached_data = json.loads(cached_sitemap)
-        if not cached_data:
-            print("Cached sitemap data is empty, refetching...")
-        else:
-            return cached_data  # Utilizar los datos del caché si están presentes y son válidos
-
+async def fetch_sitemap(client, url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
     }
-
     try:
-        response = await client.get(url, headers=headers, timeout=timeout_config)
-        if response.status_code != 200:
-            print(f"HTTP status code {response.status_code} received for {url}, retrying...")
-            response = await client.get(url, headers=headers, timeout=timeout_config)  # Retry once if non-200 received
-            if response.status_code != 200:
-                print(f"Failed to fetch sitemap after retry for {url}: {response.status_code}")
-                return None
-
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
         sitemap_contents = xmltodict.parse(response.content)
         all_urls = []
 
         if 'sitemapindex' in sitemap_contents:
-            sitemap_indices = sitemap_contents.get('sitemapindex', {}).get('sitemap', [])
+            sitemap_indices = sitemap_contents['sitemapindex']['sitemap']
             sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
             for sitemap in sitemap_indices:
-                sitemap_url = sitemap.get('loc')
-                child_urls = await fetch_sitemap(client, sitemap_url, redis_client, timeout_config)
-                if child_urls:
-                    all_urls.extend(child_urls)
+                sitemap_url = sitemap['loc']
+                sitemap_resp = await client.get(sitemap_url, headers=headers)
+                sitemap_resp.raise_for_status()
+                individual_sitemap = xmltodict.parse(sitemap_resp.content)
+                urls = [url['loc'] for url in individual_sitemap['urlset']['url']]
+                all_urls.extend(urls)
         elif 'urlset' in sitemap_contents:
-            urls = [url.get('loc') for url in sitemap_contents.get('urlset', {}).get('url', [])]
-            all_urls.extend(urls)  # Directly add since they are final URLs
+            all_urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
 
-        if all_urls:
-            await redis_client.set(redis_key, json.dumps(all_urls), ex=86400)  # 24-hour cache expiration
-            print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
-        else:
-            print(f"No URLs found in the sitemap at {url}. Not caching empty result.")
-            return None
+        print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
+        return all_urls
     except Exception as e:
-        print(f"Exception occurred while fetching sitemap from {url}: {e}")
-        return None
-    return all_urls
-
-async def fetch_url(client, url, timeout_config, max_redirects=5):
-    current_url = url
-    tried_urls = set()  # Mantener un registro de las URLs probadas para detectar bucles
-
-    for _ in range(max_redirects):
-        if current_url in tried_urls:
-            print(f"Detected redirect loop at {current_url}")
-            return None
-        tried_urls.add(current_url)
-
-        try:
-            response = await client.get(current_url, timeout=timeout_config)
-            if response.status_code == 200:
-                return current_url
-            elif response.status_code in (301, 302):
-                location = response.headers.get('Location')
-                if not location:
-                    print(f"Redirect from {current_url} lacks 'Location' header; cannot continue.")
-                    return None
-                current_url = location  # Actualizar con la nueva URL de redirección
-            else:
-                print(f"Unexpected status code {response.status_code} at {current_url}")
-                return None
-        except Exception as e:
-            print(f"Exception during fetch of {current_url}: {e}")
-            return None
-
-    print(f"Failed to fetch URL after {max_redirects} redirects: {current_url}")
-    return None
-
-@app.get("/test-redirect")
-async def test_redirect():
-    client = app.state.client  # Utiliza el cliente HTTP almacenado en el estado de la app
-    url = 'http://example.com/some-redirect-url'
-    timeout_config = Timeout(10.0, read=60.0)  # Configura los tiempos de espera apropiadamente
-
-    try:
-        final_url = await fetch_url(client, url, timeout_config)
-        if final_url:
-            # Aquí podrías llamar a otra función para procesar la URL final
-            return {"final_url": final_url, "message": "URL fetched successfully"}
-        else:
-            return {"error": "Failed to fetch the final URL"}
-    except Exception as e:
-        return {"error": str(e)}
-
-async def validate_urls(client, urls):
-    validated_urls = []
-    for url in urls:
-        status = await check_url_status(client, url)
-        if status == 200:
-            validated_urls.append(url)
-        else:
-            print(f"Skipping URL due to non-200 status ({status}): {url}")
-    return validated_urls
-
-async def check_url_status(client, url):
-    try:
-        response = await client.head(url)
-        return response.status_code
-    except Exception as e:
-        print(f"Error checking status for URL {url}: {e}")
+        print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
         return None
 
-async def validate_urls(client, urls):
-    validated_urls = []
-    for url in urls:
-        status = await check_url_status(client, url)
-        if status == 200:
-            validated_urls.append(url)
-        else:
-            print(f"Skipping URL due to non-200 status ({status}): {url}")
-    return validated_urls
-
-async def check_url_status(client, url):
-    try:
-        response = await client.head(url)
-        return response.status_code
-    except Exception as e:
-        print(f"Error checking status for URL {url}: {e}")
-        return None
 
 # Define tus stopwords y términos genéricos
 stopwords = {"y", "de", "la", "el", "en", "un", "una", "que", "es", "por", "con", "los", "las", "del", "al", "como", "para", "más", "pero", "su", "le", "lo", "se", "a", "o", "e", "nos", "sin", "sobre", "entre", "si", "tu", "mi", "te", "se", "qué", "cómo", "cuándo", "dónde", "por qué", "cuál", "su"}
@@ -404,45 +277,36 @@ def find_meta_description(soup: BeautifulSoup) -> str:
         return meta_tag["content"]
     return "No description available"
 
-async def analyze_url(url: str, client: httpx.AsyncClient, redis_client: Redis) -> dict:
-    redis_key = f"url_analysis:{url}"
-    cached_result = await redis_client.get(redis_key)
-    if cached_result:
-        print(f"Cache hit for URL: {url}")
-        return json.loads(cached_result)
-
+async def analyze_url(url: str, client: httpx.AsyncClient) -> dict:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
     }
     try:
         response = await client.get(url, headers=headers)
-        if response.status_code != 200:
-            print(f"Skipping URL due to non-200 status code: {url} with status {response.status_code}")
+        print(f"Attempting to process URL: {url} with status: {response.status_code}")
+        if response.status_code == 200 and 'text/html' in response.headers.get('Content-Type', ''):
+            soup = BeautifulSoup(response.content, 'html.parser')
+            slug = extract_slug(url)
+            title = soup.title.text if soup.title else "No title"
+            meta_description = find_meta_description(soup)
+            h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
+            h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
+            text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
+
+            main_keyword = slug
+            secondary_keywords = find_keywords(title, h1s, h2s, text_relevant, exclude=[slug])
+            semantic_search_intent = calculate_semantic_search_intent(main_keyword, secondary_keywords)
+
+            return {
+                "url": url,
+                "title": title,
+                "meta_description": meta_description,
+                "main_keyword": main_keyword,
+                "secondary_keywords": secondary_keywords,
+                "semantic_search_intent": semantic_search_intent
+            }
+        else:
             return None
-
-        soup = BeautifulSoup(response.content, 'html.parser')
-        slug = extract_slug(url)
-        title = soup.title.text if soup.title else "No title"
-        meta_description = find_meta_description(soup)
-        h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
-        h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
-        text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
-
-        main_keyword = slug
-        secondary_keywords = find_keywords(title, h1s, h2s, text_relevant, exclude=[slug])
-        semantic_search_intent = calculate_semantic_search_intent(main_keyword, secondary_keywords)
-
-        result = {
-            "url": url,
-            "title": title,
-            "meta_description": meta_description,
-            "main_keyword": main_keyword,
-            "secondary_keywords": secondary_keywords,
-            "semantic_search_intent": semantic_search_intent
-        }
-
-        await redis_client.set(redis_key, json.dumps(result), ex=86400)
-        return result
     except Exception as e:
         print(f"Error processing URL {url}: {e}")
         return None
