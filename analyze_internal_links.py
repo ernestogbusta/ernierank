@@ -1,5 +1,4 @@
-########## ENLACES INTERNOS ##########
-
+#este es el código de analyze_internal_links.py
 from fastapi import FastAPI, HTTPException, Request, Depends, Query, APIRouter, Body
 from fastapi.responses import JSONResponse
 import httpx
@@ -37,6 +36,19 @@ class InternalLinkAnalysis(BaseModel):
     domain: str
     internal_links_data: List[LinkAnalysis]
 
+from fastapi import FastAPI, HTTPException, Body
+import httpx
+from httpx import Timeout
+from bs4 import BeautifulSoup
+import xmltodict
+import logging
+from pydantic import BaseModel
+from typing import List, Optional
+from urllib.parse import urlparse, urljoin
+import asyncio
+
+app = FastAPI()
+
 class LinkAnalysis(BaseModel):
     url: str
     anchor_text: str
@@ -47,19 +59,13 @@ class InternalLinkAnalysis(BaseModel):
     domain: str
     internal_links_data: List[LinkAnalysis]
 
-@app.post("/analyze_internal_links", response_model=InternalLinkAnalysis)
+async def get_http_client():
+    return httpx.AsyncClient(timeout=Timeout(30.0, connect=5.0, read=60.0, write=60.0))
+
+@app.post("/analyze_internal_links")
 async def analyze_internal_links(domain: str = Body(..., embed=True)):
-    async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-        sitemap_url = f"{domain.rstrip('/')}/sitemap_index.xml"
-        urls = await fetch_sitemap_for_internal_links(client, sitemap_url)
-        if not urls:
-            raise HTTPException(status_code=404, detail="No valid URLs found in the sitemap.")
-        
-        internal_links_data = await process_internal_links(client, urls, domain)
-        if not internal_links_data:
-            raise HTTPException(status_code=404, detail="No internal links were processed or found.")
-        
-        return InternalLinkAnalysis(domain=domain, internal_links_data=internal_links_data)
+    ...
+    return InternalLinkAnalysis(domain=domain, internal_links_data=internal_links_data)
 
 async def fetch_sitemap_for_internal_links(client: httpx.AsyncClient, url: str) -> List[str]:
     try:
@@ -214,6 +220,3 @@ def is_internal_link(link: str, base_url: str) -> bool:
     domain_link = '.'.join(parsed_link.netloc.split('.')[-2:])
     domain_base = '.'.join(parsed_base.netloc.split('.')[-2:])
     return domain_link == domain_base
-
-
-######################################

@@ -1,71 +1,58 @@
-from fastapi import FastAPI, HTTPException, Request, Depends, Query, APIRouter, Body
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request, Depends, Query
 import httpx
-from httpx import Timeout, AsyncClient
+from httpx import Timeout
 from bs4 import BeautifulSoup
 import xmltodict
 import os
 import json
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 import uvicorn
 from collections import Counter
-from typing import List, Dict, Any, Optional
-from urllib.parse import urlparse, urljoin
+from typing import List, Dict, Optional
+from urllib.parse import urlparse
 import re
 import asyncio
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 from redis.asyncio import Redis
 from dotenv import load_dotenv
-import logging
-from logging.handlers import RotatingFileHandler
 import subprocess
-
-load_dotenv()
-app = FastAPI(title="ErnieRank API")
-
-class RedisMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # Aquí puedes añadir lógica antes de la petición
-        response = await call_next(request)
-        # Aquí puedes añadir lógica después de la petición
-        return response
-
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logging.info(f"Handling request: {request.method} {request.url}")
-    response = await call_next(request)
-    logging.info(f"Request completed: {response.status_code}")
-    return response
-
-@app.get("/")
-async def root():
-    logging.debug("Accediendo a la ruta raíz")
-    return {"message": "Hello World"}
-
-@app.on_event("startup")
-async def startup_event():
-    # Establecer conexión con Redis
-    app.state.redis = await Redis(decode_responses=True)
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    # Cerrar conexión con Redis
-    await app.state.redis.close()
-
-app.add_middleware(RedisMiddleware)
-
-class RedisMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        redis_client = request.app.state.redis
-        # Puedes hacer algo con Redis aquí, como verificar una sesión
-        response = await call_next(request)
-        return response
 
 class BatchRequest(BaseModel):
     domain: str
     batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
+
+load_dotenv()
+app = FastAPI(title="ErnieRank API")
+
+# Middleware para manejar la conexión de Redis
+class RedisMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        request.state.redis = app.state.redis
+        response = await call_next(request)
+        return response
+
+# Eventos de inicio y cierre para configurar y cerrar Redis
+@app.on_event("startup")
+async def startup_event():
+    timeout = Timeout(15.0, read=180.0)  # 15 segundos para conectar, 180 segundos para leer
+    app.state.redis = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379"), decode_responses=True)
+    app.state.client = httpx.AsyncClient(timeout=timeout)
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await app.state.redis.close()
+    await app.state.client.aclose()  # Properly close the client
+
+app.add_middleware(RedisMiddleware)
+
+@app.get("/")
+async def root(request: Request):
+    redis_client = request.state.redis
+    await redis_client.set("key", "value")
+    value = await redis_client.get("key")
+    return {"hello": "world", "key": value}
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
@@ -119,7 +106,6 @@ async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout
         if not cached_data:
             print("Cached sitemap data is empty, refetching...")
         else:
-            print(f"Using cached data for {url}")
             return cached_data  # Utilizar los datos del caché si están presentes y son válidos
 
     headers = {
@@ -142,26 +128,25 @@ async def fetch_sitemap(client, url, redis_client: Redis, timeout_config=Timeout
         if 'sitemapindex' in sitemap_contents:
             sitemap_indices = sitemap_contents.get('sitemapindex', {}).get('sitemap', [])
             sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
-            child_tasks = [asyncio.create_task(fetch_sitemap(client, sitemap.get('loc'), redis_client, timeout_config)) for sitemap in sitemap_indices]
-            children_urls = await asyncio.gather(*child_tasks)
-            for urls in children_urls:
-                if urls:
-                    all_urls.extend(urls)
+            for sitemap in sitemap_indices:
+                sitemap_url = sitemap.get('loc')
+                child_urls = await fetch_sitemap(client, sitemap_url, redis_client, timeout_config)
+                if child_urls:
+                    all_urls.extend(child_urls)
         elif 'urlset' in sitemap_contents:
             urls = [url.get('loc') for url in sitemap_contents.get('urlset', {}).get('url', [])]
             all_urls.extend(urls)  # Directly add since they are final URLs
 
-        validated_urls = await validate_urls(client, all_urls)
-        if validated_urls:
-            await redis_client.set(redis_key, json.dumps(validated_urls), ex=86400)  # 24-hour cache expiration
-            print(f"Fetched and validated {len(validated_urls)} URLs from the sitemap at {url}.")
-            return validated_urls
+        if all_urls:
+            await redis_client.set(redis_key, json.dumps(all_urls), ex=86400)  # 24-hour cache expiration
+            print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
         else:
-            print(f"No valid URLs found in the sitemap at {url}. Not caching empty result.")
+            print(f"No URLs found in the sitemap at {url}. Not caching empty result.")
             return None
     except Exception as e:
         print(f"Exception occurred while fetching sitemap from {url}: {e}")
         return None
+    return all_urls
 
 async def fetch_url(client, url, timeout_config, max_redirects=5):
     current_url = url
@@ -420,54 +405,47 @@ def find_meta_description(soup: BeautifulSoup) -> str:
     return "No description available"
 
 async def analyze_url(url: str, client: httpx.AsyncClient, redis_client: Redis) -> dict:
-    # Saltar URL si es una imagen
-    if url.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp')):
-        print(f"Skipping image URL: {url}")
-        return None
-
-    # Revisar estado de la URL antes de procesar para asegurar que es una página con status 200
-    response = await client.head(url)
-    if response.status_code != 200:
-        print(f"Skipping URL due to non-200 status: {url} with status {response.status_code}")
-        return None
-
-    # Usar caché para evitar procesamiento repetido
     redis_key = f"url_analysis:{url}"
     cached_result = await redis_client.get(redis_key)
     if cached_result:
         print(f"Cache hit for URL: {url}")
         return json.loads(cached_result)
 
-    # Realizar petición GET si el URL no está en caché o necesita actualización
-    response = await client.get(url)
-    if response.status_code != 200:
-        print(f"Failed to fetch URL {url} with status {response.status_code}, skipping...")
-        return None
-
-    soup = BeautifulSoup(response.content, 'html.parser')
-    title = soup.title.text if soup.title else "No title"
-    meta_description = find_meta_description(soup)
-    h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
-    h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
-    text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
-
-    # Extraer palabras clave y slug
-    slug = extract_slug(url)
-    refined_keywords = refine_keywords(f"{title} {' '.join(h1s)} {' '.join(h2s)} {text_relevant}")
-    keyword_density = calculate_keyword_density(text_relevant, refined_keywords)
-
-    # Almacenar y devolver resultados
-    result = {
-        "url": url,
-        "status": response.status_code,
-        "title": title,
-        "meta_description": meta_description,
-        "h1s": h1s,
-        "h2s": h2s,
-        "slug": slug,
-        "refined_keywords": refined_keywords,
-        "keyword_density": keyword_density
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
     }
+    try:
+        response = await client.get(url, headers=headers)
+        if response.status_code != 200:
+            print(f"Skipping URL due to non-200 status code: {url} with status {response.status_code}")
+            return None
+
+        soup = BeautifulSoup(response.content, 'html.parser')
+        slug = extract_slug(url)
+        title = soup.title.text if soup.title else "No title"
+        meta_description = find_meta_description(soup)
+        h1s = [h1.text.strip() for h1 in soup.find_all('h1')]
+        h2s = [h2.text.strip() for h2 in soup.find_all('h2', limit=3)]
+        text_relevant = ' '.join([p.text.strip() for p in soup.find_all('p', limit=5)])
+
+        main_keyword = slug
+        secondary_keywords = find_keywords(title, h1s, h2s, text_relevant, exclude=[slug])
+        semantic_search_intent = calculate_semantic_search_intent(main_keyword, secondary_keywords)
+
+        result = {
+            "url": url,
+            "title": title,
+            "meta_description": meta_description,
+            "main_keyword": main_keyword,
+            "secondary_keywords": secondary_keywords,
+            "semantic_search_intent": semantic_search_intent
+        }
+
+        await redis_client.set(redis_key, json.dumps(result), ex=86400)
+        return result
+    except Exception as e:
+        print(f"Error processing URL {url}: {e}")
+        return None
 
 def calculate_semantic_search_intent(main_keyword, secondary_keywords):
     # Combine main and secondary keywords with given weights
@@ -559,10 +537,6 @@ def test_api():
         print(presentation_output)
     except Exception as e:
         print(str(e))
-
-
-
-
 
 if __name__ == "__main__":
     import sys
