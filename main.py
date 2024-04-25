@@ -1,5 +1,8 @@
+#main.py
+
 from analyze_url import analyze_url
-from fastapi import FastAPI, HTTPException, Request
+from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis
+from fastapi import FastAPI, HTTPException, Request, Body
 import httpx
 from bs4 import BeautifulSoup
 import xmltodict
@@ -31,6 +34,9 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.client.aclose()
+
+
+########## ANALYZE_URL ############
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
@@ -102,6 +108,21 @@ async def fetch_sitemap(client, url):
     except Exception as e:
         print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
         return None
+
+############################################
+
+
+########## ANALYZE_INTERNAL_LINKS ##########
+
+@app.post("/analyze_internal_links", response_model=InternalLinkAnalysis)
+async def handle_analyze_internal_links(domain: str = Body(..., embed=True)):
+    async with httpx.AsyncClient() as client:
+        result = await analyze_internal_links(domain, client)
+        return result
+
+
+
+############################################
 
 if __name__ == "__main__":
     import sys

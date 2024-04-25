@@ -1,70 +1,28 @@
-#este es el código de analyze_internal_links.py
-from fastapi import FastAPI, HTTPException, Request, Depends, Query, APIRouter, Body
-from fastapi.responses import JSONResponse
-import httpx
-from httpx import Timeout, AsyncClient
-from bs4 import BeautifulSoup
-import xmltodict
-import os
-import json
-from pydantic import BaseModel, Field
-import uvicorn
-from collections import Counter
-from typing import List, Dict, Any, Optional
-from urllib.parse import urlparse, urljoin
-import re
-import asyncio
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.responses import Response
-from redis.asyncio import Redis
-from dotenv import load_dotenv
-import logging
-from logging.handlers import RotatingFileHandler
-import subprocess
+#analyze_internal_links.py
 
-async def get_http_client():
-    # Aumentar el tiempo de espera total para el cliente
-    return AsyncClient(timeout=Timeout(30.0, connect=5.0, read=60.0, write=60.0))
+import httpx
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse, urljoin
+from typing import List, Dict, Optional
+import asyncio
+from pydantic import BaseModel, HttpUrl
+from fastapi import Body
 
 class LinkAnalysis(BaseModel):
-    url: str
+    url: HttpUrl
     anchor_text: str
     seo_quality: Optional[str] = None
     similarity_score: Optional[float] = None
 
 class InternalLinkAnalysis(BaseModel):
-    domain: str
-    internal_links_data: List[LinkAnalysis]
-
-from fastapi import FastAPI, HTTPException, Body
-import httpx
-from httpx import Timeout
-from bs4 import BeautifulSoup
-import xmltodict
-import logging
-from pydantic import BaseModel
-from typing import List, Optional
-from urllib.parse import urlparse, urljoin
-import asyncio
-
-app = FastAPI()
-
-class LinkAnalysis(BaseModel):
-    url: str
-    anchor_text: str
-    seo_quality: Optional[str] = None
-    similarity_score: Optional[float] = None
-
-class InternalLinkAnalysis(BaseModel):
-    domain: str
-    internal_links_data: List[LinkAnalysis]
+    domain: HttpUrl
+    internal_links_data: Optional[List[LinkAnalysis]] = []
 
 async def get_http_client():
     return httpx.AsyncClient(timeout=Timeout(30.0, connect=5.0, read=60.0, write=60.0))
 
-@app.post("/analyze_internal_links")
-async def analyze_internal_links(domain: str = Body(..., embed=True)):
-    ...
+async def analyze_internal_links(domain: str, client: httpx.AsyncClient) -> InternalLinkAnalysis:
+    internal_links_data = generate_internal_links_data(domain)
     return InternalLinkAnalysis(domain=domain, internal_links_data=internal_links_data)
 
 async def fetch_sitemap_for_internal_links(client: httpx.AsyncClient, url: str) -> List[str]:
@@ -197,6 +155,15 @@ async def fetch_soup(url: str, client: httpx.AsyncClient) -> Optional[BeautifulS
     except Exception as e:
         logging.error(f"An unexpected error occurred while fetching URL {url}: {e}")
     return None
+
+def generate_internal_links_data(domain):
+    # Esta es una función simulada que genera datos de ejemplo para los enlaces internos
+    # Podrías adaptarla para que procese datos reales basados en el dominio
+    sample_data = [
+        {"url": f"{domain}/about", "anchor_text": "About Us", "seo_quality": "Good", "similarity_score": 0.9},
+        {"url": f"{domain}/contact", "anchor_text": "Contact Us", "seo_quality": "Excellent", "similarity_score": 0.8}
+    ]
+    return [LinkAnalysis(**link) for link in sample_data]
 
 def extract_keywords_from_page(url: str) -> List[str]:
     """
