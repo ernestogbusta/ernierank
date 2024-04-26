@@ -3,17 +3,18 @@
 import httpx
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, urljoin
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 import asyncio
-from pydantic import BaseModel, HttpUrl, ValidationError
+from pydantic import BaseModel, HttpUrl, ValidationError, Field
 from fastapi import Body
 import logging
-from httpx import AsyncClient, Timeout
+from httpx import AsyncClient, Timeout, HTTPStatusError
 import xmltodict
 import re
 
 class LinkAnalysis(BaseModel):
     url: HttpUrl
+    source_url: HttpUrl
     anchor_text: str
     seo_quality: Optional[str] = None
     similarity_score: Optional[float] = None
@@ -90,7 +91,7 @@ async def process_internal_links(client: httpx.AsyncClient, urls: List[str], dom
 
     return internal_links_data
 
-async def process_single_url(client, url, domain, internal_links_data):
+async def process_single_url(client: httpx.AsyncClient, url: str, domain: str, internal_links_data: List[LinkAnalysis]):
     page_content = await fetch_page_content(url, client)
     if page_content:
         soup = BeautifulSoup(page_content, 'html.parser')
@@ -102,6 +103,7 @@ async def process_single_url(client, url, domain, internal_links_data):
                     seo_quality, similarity_score = await evaluate_link_quality_and_similarity(link['anchor_text'], cleaned_url)
                     context_and_relevance = analyze_link_context_and_relevance(soup, cleaned_url, domain)
                     internal_links_data.append(LinkAnalysis(
+                        source_url=url,  # Confirmado que LinkAnalysis espera este campo
                         url=cleaned_url,
                         anchor_text=link['anchor_text'],
                         seo_quality=seo_quality,
@@ -112,9 +114,10 @@ async def process_single_url(client, url, domain, internal_links_data):
                 except ValidationError as e:
                     logging.error(f"Validation error for URL {cleaned_url}: {e}")
                 except Exception as e:
-                    logging.error(f"Error processing URL {cleaned_url}: {e}")
+                    logging.error(f"Error processing internal link at URL {cleaned_url}: {e}")
     else:
-        logging.error(f"Failed to fetch or parse content for URL {url}, which might be affecting internal links extraction.")
+        logging.error(f"Failed to process URL {url} due to content fetch failure")
+
 
 
 async def fetch_http_status(url: str, client: httpx.AsyncClient) -> int:
@@ -127,51 +130,66 @@ async def fetch_http_status(url: str, client: httpx.AsyncClient) -> int:
         return 0  # Indicating an unreachable URL
 
 
-async def evaluate_link_quality_and_similarity(anchor_text: str, target_url: str) -> (str, float):
-    """
-    Evalúa la calidad de SEO y calcula la similitud de contenido basado en el texto del ancla y el slug de la URL de destino.
-    """
-    content_keywords = extract_keywords_from_page(target_url)
-    expanded_anchor_text = expand_with_synonyms(anchor_text)  # Ampliar texto del ancla con sinónimos
-    anchor_keywords = set(expanded_anchor_text.lower().split())
-    content_keywords_set = set(content_keywords)
-    overlap = anchor_keywords.intersection(content_keywords_set)
-    similarity_score = len(overlap) / len(anchor_keywords) if anchor_keywords else 0
-
+async def evaluate_link_quality_and_similarity(anchor_text: str, target_url: str) -> Tuple[str, float]:
+    # Dummy functions to simulate SEO quality and similarity evaluation
+    # In practice, these would require more sophisticated analysis based on real data
+    content_keywords = extract_keywords_from_url(target_url)
+    anchor_keywords = set(anchor_text.lower().split())
+    overlap = anchor_keywords.intersection(content_keywords)
+    similarity_score = len(overlap) / len(anchor_keywords) if anchor_keywords else 0.0
     seo_quality = 'Excellent' if similarity_score > 0.5 else 'Good' if similarity_score > 0 else 'Needs improvement'
     return seo_quality, similarity_score
 
-async def fetch_page_content(url: str, client: httpx.AsyncClient) -> Optional[str]:
+async def fetch_page_content(url: str, client: httpx.AsyncClient) -> str:
     try:
-        response = await client.get(url, follow_redirects=True, timeout=Timeout(20.0))
-        if response.status_code == 200:
-            return response.text
-        elif response.status_code in [301, 302]:
-            new_url = response.headers.get('Location')
-            if new_url:
-                # Asegurar que la nueva URL es absoluta
-                new_url = urljoin(url, new_url)
-                return await fetch_page_content(new_url, client)
-        else:
-            logging.error(f"Failed to fetch {url}: HTTP {response.status_code}")
+        # Permitimos redirecciones automáticamente con el parámetro 'follow_redirects'
+        response = await client.get(url, follow_redirects=True)
+        response.raise_for_status()  # Levanta una excepción para estados de error
+        return response.text
     except httpx.RequestError as e:
-        logging.error(f"Request error while fetching {url}: {e}")
-    except Exception as e:
-        logging.error(f"Unexpected error fetching {url}: {e}")
-    return None
+        logging.error(f"Request error while fetching {url}: {str(e)}")
+        return None
+    except httpx.HTTPStatusError as e:
+        logging.error(f"HTTP status error while fetching {url}: {str(e)}")
+        return None
+
+async def analyze_links(page_url: str, client: AsyncClient):
+    html_content = await fetch_page_content(page_url, client)
+    soup = BeautifulSoup(html_content, 'html.parser')
+    links = soup.find_all('a', href=True)
+    
+    results = []
+    for link in links:
+        try:
+            link_url = link['href']
+            anchor_text = link.get_text(strip=True)
+            # Supongamos que tenemos funciones para evaluar la calidad del SEO y la similaridad
+            seo_quality, similarity_score = evaluate_seo_quality(link_url, anchor_text)  # Esta función debe definirse adecuadamente
+            # Creamos la instancia de LinkAnalysis
+            link_analysis = LinkAnalysis(
+                url=link_url,
+                source_url=page_url,
+                anchor_text=anchor_text,
+                seo_quality=seo_quality,
+                similarity_score=similarity_score,
+                context='Ejemplo de contexto',  # Este debería obtenerse de alguna manera relevante
+                relevance='Alta'  # Esto es un ejemplo estático, debería calcularse
+            )
+            results.append(link_analysis)
+        except Exception as e:
+            logging.error(f"Error processing link {link_url} from {page_url}: {str(e)}")
+    
+    return results    
 
 def extract_internal_links(soup: BeautifulSoup, base_url: str, domain: str) -> List[Dict[str, str]]:
+    """Extract internal links from the BeautifulSoup object based on the domain."""
     links = []
     domain_netloc = urlparse(domain).netloc
     for a_tag in soup.find_all('a', href=True):
         link_url = urljoin(base_url, a_tag['href'])
         link_netloc = urlparse(link_url).netloc
-        # Solo considera enlaces internos y asegura que no sean enlaces a secciones inútiles
         if link_netloc == domain_netloc and not urlparse(link_url).path.startswith(('#', 'javascript:', 'mailto:', 'tel:')):
-            links.append({
-                'url': link_url,
-                'anchor_text': a_tag.get_text(strip=True) or 'No Text'
-            })
+            links.append({'url': link_url, 'anchor_text': a_tag.get_text(strip=True) or 'No Text'})
     return links
 
 async def evaluate_internal_links(links: List[Dict[str, str]], source_url: str, client: httpx.AsyncClient) -> List[LinkAnalysis]:
@@ -215,6 +233,11 @@ def extract_keywords_from_page(url: str) -> List[str]:
     keywords = slug.replace('-', ' ').split()
     return keywords
 
+def extract_keywords_from_url(url: str) -> set:
+    """Extract keywords from the URL path for simplicity."""
+    path_segments = urlparse(url).path.split('/')
+    return {segment.replace('-', ' ').lower() for segment in path_segments if segment}
+
 def is_internal_link(link: str, base_url: str) -> bool:
     parsed_link = urlparse(link)
     parsed_base = urlparse(base_url)
@@ -229,17 +252,30 @@ def is_internal_link(link: str, base_url: str) -> bool:
     return domain_link == domain_base
 
 def analyze_link_context_and_relevance(soup: BeautifulSoup, link_url: str, domain: str) -> Dict[str, str]:
-    # Extraer el contexto del contenido alrededor del enlace
+    """
+    Analyze the context and relevance of a link within its page content.
+    """
     context = ''
-    for a_tag in soup.find_all('a', href=True):
-        if a_tag['href'] == link_url:
-            context = a_tag.find_parent('p').text if a_tag.find_parent('p') else ''
-            break
+    relevance = 'Low'
+    try:
+        for a_tag in soup.find_all('a', href=True):
+            if a_tag['href'] == link_url:
+                # Extraer el contexto. Podría ser el párrafo que contiene el enlace o algún otro elemento significativo.
+                context = a_tag.find_parent('p').text if a_tag.find_parent('p') else 'Contexto no definido'
+                
+                # Evaluar la relevancia. Esto es un ejemplo simplificado, deberías desarrollar una lógica basada en tus necesidades.
+                if 'keyword relevante' in context:
+                    relevance = 'High'
+                break
+
+    except Exception as e:
+        logging.error(f"Error analyzing context and relevance for URL {link_url} in domain {domain}: {str(e)}")
     
-    # Simulación de análisis de relevancia
-    relevance = 'High' if 'example keyword' in context else 'Low'
-    
-    return {'context': context, 'relevance': relevance}
+    return {
+        'context': context,
+        'relevance': relevance
+    }
+
 
 def get_surrounding_text(a_tag):
     # Extrae el texto circundante para entender mejor el contexto del enlace
@@ -295,7 +331,7 @@ def correct_url(url: str) -> str:
     return url
 
 def clean_url(url: str) -> str:
-    # Corrige problemas comunes en las URLs como espacios no deseados y esquemas incorrectos.
+    """Normalize and clean URLs to ensure consistency."""
     url = url.strip()
     url = url.replace(" ", "")
     if "://" not in url:
