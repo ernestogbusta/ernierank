@@ -25,8 +25,9 @@ class BatchRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    app.state.client = httpx.AsyncClient()
+    app.state.client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
     app.state.progress_file = "progress.json"
+    app.state.semaphore = asyncio.Semaphore(10)  # Limita a 10 tareas concurrentes
     if not os.path.exists(app.state.progress_file):
         with open(app.state.progress_file, 'w') as file:
             json.dump({"current_index": 0, "urls": []}, file)
