@@ -11,6 +11,7 @@ import logging
 from httpx import AsyncClient, Timeout
 import xmltodict
 import re
+from functools import wraps, lru_cache
 
 class LinkAnalysis(BaseModel):
     source_url: HttpUrl = Field(..., description="URL of the page where the link is located")
@@ -44,6 +45,9 @@ async def analyze_internal_links(domain: str, client: httpx.AsyncClient) -> Inte
             for link in soup.find_all('a', href=True):
                 link_url = urljoin(corrected_domain, link['href'])
                 if urlparse(link_url).netloc == urlparse(corrected_domain).netloc:
+                    # Filtrar URLs que contienen fragmentos
+                    if '#' in link_url:
+                        continue
                     seo_quality, similarity_score = await evaluate_link_quality_and_similarity(link.get_text(strip=True), link_url, client)
                     internal_links_data.append(LinkAnalysis(
                         source_url=corrected_domain,
@@ -60,11 +64,39 @@ async def analyze_internal_links(domain: str, client: httpx.AsyncClient) -> Inte
         logging.error(f"Error analyzing internal links for {domain}: {e}")
         return InternalLinkAnalysis(domain=corrected_domain, internal_links_data=[])
 
+def async_lru_cache(maxsize=128):
+    def decorator(func):
+        cached_func = lru_cache(maxsize=maxsize)(func)
+
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            key = args + tuple(kwargs.items())
+            if key not in wrapper.cache:
+                wrapper.cache[key] = await func(*args, **kwargs)
+            return wrapper.cache[key]
+
+        wrapper.cache = {}
+        return wrapper
+
+    return decorator
+
+@async_lru_cache(maxsize=100)
+async def fetch_page_soup(url: str, client: httpx.AsyncClient) -> Optional[BeautifulSoup]:
+    try:
+        response = await client.get(url, follow_redirects=True)
+        if response.status_code == 200:
+            return BeautifulSoup(response.text, 'html.parser')
+        else:
+            logging.error(f"HTTP error {response.status_code} at {url}")
+            return None
+    except Exception as e:
+        logging.error(f"Error while fetching URL {url}: {e}")
+        return None
+
 async def evaluate_link_quality_and_similarity(anchor_text: str, target_url: str, client: httpx.AsyncClient):
     try:
-        response = await client.get(target_url, follow_redirects=True)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
+        soup = await fetch_page_soup(target_url, client)
+        if soup:
             title = soup.title.text if soup.title else ""
             slug = urlparse(target_url).path.split('/')[-1].replace('-', ' ')
             meta_description = soup.find('meta', attrs={'name': 'description'})
@@ -80,7 +112,7 @@ async def evaluate_link_quality_and_similarity(anchor_text: str, target_url: str
 
             return seo_quality, similarity_score
         else:
-            logging.error(f"Failed to fetch {target_url}: HTTP {response.status_code}")
+            logging.error(f"Failed to fetch {target_url}: Possibly a non-200 status code or network issue")
             return "Error", 0.0
     except Exception as e:
         logging.error(f"Error fetching URL {target_url}: {e}")
@@ -102,47 +134,6 @@ def evaluate_seo_quality(anchor_text, title, description, headers):
     elif matches == 1:
         return 'Bueno'
     return 'Necesita optimización'
-
-async def evaluate_internal_links(links: List[Dict[str, str]], source_url: str, client: httpx.AsyncClient) -> List[LinkAnalysis]:
-    results = []
-    source_soup = await fetch_soup(source_url, client)
-    if not source_soup:
-        return []
-
-    for link in links:
-        target_soup = await fetch_soup(link['url'], client)
-        if not target_soup:
-            results.append(LinkAnalysis(url=link['url'], anchor_text=link['anchor_text'], seo_quality='Target page could not be fetched', similarity_score=0))
-        else:
-            seo_quality, similarity_score = await evaluate_link_quality_and_similarity(link['anchor_text'], link['url'])
-            results.append(LinkAnalysis(url=link['url'], anchor_text=link['anchor_text'], seo_quality=seo_quality, similarity_score=similarity_score))
-    return results
-
-async def fetch_soup(url: str, client: httpx.AsyncClient) -> Optional[BeautifulSoup]:
-    try:
-        response = await client.get(url, follow_redirects=True)
-        if response.status_code == 200:
-            print(f"Página recuperada correctamente para scraping: {url}")
-            return BeautifulSoup(response.content, 'html.parser')
-        else:
-            logging.warning(f"Error HTTP {response.status_code} al intentar recuperar la URL: {url}")
-    except httpx.HTTPStatusError as e:
-        logging.error(f"HTTP status error while fetching URL {url}: {e.response.status_code}")
-    except httpx.RequestError as e:
-        logging.error(f"Request error while fetching URL {url}: {e}")
-    except Exception as e:
-        logging.error(f"An unexpected error occurred while fetching URL {url}: {e}")
-    return None
-
-def extract_keywords_from_page(url: str) -> List[str]:
-    """
-    Extrae palabras clave a partir del slug de la URL.
-    """
-    from urllib.parse import urlparse
-    path = urlparse(url).path
-    slug = path.strip('/').split('/')[-1]  # Toma el último segmento del path como slug
-    keywords = slug.replace('-', ' ').split()
-    return keywords
 
 def is_internal_link(link: str, base_url: str) -> bool:
     parsed_link = urlparse(link)
