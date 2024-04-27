@@ -1,8 +1,8 @@
-
+# main.py
 
 from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
-
+from analyze_wpo import analyze_wpo
 from fastapi import FastAPI, HTTPException, Request, Body
 import httpx
 from bs4 import BeautifulSoup
@@ -16,6 +16,10 @@ from typing import List, Dict, Optional
 from urllib.parse import urlparse
 import re
 import asyncio
+import time
+import requests
+
+from fastapi import APIRouter
 
 app = FastAPI(title="ErnieRank API")
 
@@ -113,6 +117,7 @@ async def fetch_sitemap(client, url):
 ############################################
 
 
+
 ########## ANALYZE_INTERNAL_LINKS ##########
 
 @app.post("/analyze_internal_links", response_model=InternalLinkAnalysis)
@@ -124,6 +129,39 @@ async def handle_analyze_internal_links(domain: str = Body(..., embed=True)):
 
 
 ############################################
+
+
+
+
+########## ANALYZE_WPO ##########
+
+
+def check_server_availability(url):
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        return True
+    except requests.exceptions.RequestException as e:
+        print(f"Server not available for {url}: {str(e)}")
+        return False
+
+# Llamada a la función
+if check_server_availability('https://example.com'):
+    print("Procede con la obtención del tamaño de los recursos")
+else:
+    print("El servidor no está disponible. Intenta más tarde.")
+
+class WPORequest(BaseModel):
+    url: str
+
+@app.post("/analyze_wpo")
+async def analyze_wpo_endpoint(request: WPORequest):
+    # Asegúrate de pasar la URL como argumento a la función analyze_wpo
+    return await analyze_wpo(request.url)
+
+############################################
+
+
 
 if __name__ == "__main__":
     import sys
