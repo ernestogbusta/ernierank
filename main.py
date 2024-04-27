@@ -20,6 +20,7 @@ import asyncio
 import time
 import requests
 import logging
+import os
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -190,6 +191,7 @@ async def analyze_wpo_endpoint(request: WPORequest):
 
 ########### ANALIZE_CANNIBALIZATION ##########
 
+
 class URLData(BaseModel):
     url: str
     title: str
@@ -206,8 +208,7 @@ class CannibalizationRequest(BaseModel):
 @app.post("/analyze_cannibalization")
 async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
     logger.info("Received request for cannibalization analysis.")
-    # Llama a la función de análisis de canibalización pasando el objeto request completo
-    results = analyze_cannibalization(request.processed_urls)
+    results = await analyze_cannibalization(request.processed_urls) 
     if results.get("message"):
         return {"message": results["message"]}
     else:
