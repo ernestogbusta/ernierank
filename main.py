@@ -3,6 +3,7 @@
 from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
+from analyze_cannibalization import analyze_cannibalization
 from fastapi import FastAPI, HTTPException, Request, Body
 import httpx
 from bs4 import BeautifulSoup
@@ -18,10 +19,34 @@ import re
 import asyncio
 import time
 import requests
+import logging
 
-from fastapi import APIRouter
+# Configuración del logger
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S')
+logger = logging.getLogger("CannibalizationAnalysis")
 
 app = FastAPI(title="ErnieRank API")
+
+class URLData(BaseModel):
+    title: str
+    h1: str
+    main_keyword: str
+    secondary_keywords: List[str]
+    semantic_search_intent: str
+
+@app.post("/test")
+async def test_logging(data: List[URLData]):
+    logger.debug(f"Received data: {data}")
+    if not data:
+        logger.info("No data provided.")
+        return {"message": "No data provided."}
+    else:
+        # Simulate processing
+        logger.info("Processing data...")
+        return {"message": "Data processed."}
+
 
 class BatchRequest(BaseModel):
     domain: str
@@ -159,13 +184,41 @@ async def analyze_wpo_endpoint(request: WPORequest):
     # Asegúrate de pasar la URL como argumento a la función analyze_wpo
     return await analyze_wpo(request.url)
 
-############################################
+###############################################
+
+
+
+########### ANALIZE_CANNIBALIZATION ##########
+
+class URLData(BaseModel):
+    url: str
+    title: str
+    meta_description: str
+    main_keyword: str
+    secondary_keywords: List[str]
+    semantic_search_intent: str
+
+class CannibalizationRequest(BaseModel):
+    processed_urls: List[URLData]
+    more_batches: Optional[bool] = False
+    next_batch_start: Optional[int] = None
+
+@app.post("/analyze_cannibalization")
+async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
+    logger.info("Received request for cannibalization analysis.")
+    # Llama a la función de análisis de canibalización pasando el objeto request completo
+    results = analyze_cannibalization(request.processed_urls)
+    if results.get("message"):
+        return {"message": results["message"]}
+    else:
+        return {"cannibalization_issues": results}
+
+
+##############################################
 
 
 
 if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == 'test':
-        test_api()
-    else:
-        uvicorn.run(app, host="0.0.0.0", port=10000)
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000, log_level="debug")
+

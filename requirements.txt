@@ -8,3 +8,5 @@ starlette==0.37.2
 redis==5.0.3
 python-dotenv==1.0.1
 requests==2.31.0
+numpy==1.26.4
+utils==1.0.2
