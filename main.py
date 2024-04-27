@@ -1,5 +1,8 @@
 # main.py
 
+import cProfile
+import pstats
+import io
 from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
@@ -28,21 +31,21 @@ logger = logging.getLogger("CannibalizationAnalysis")
 
 app = FastAPI(title="ErnieRank API")
 
-# Middleware para medir el tiempo de procesamiento
 @app.middleware("http")
-async def add_process_time_header(request: Request, call_next):
-    start_time = asyncio.get_event_loop().time()
+async def log_process_time(request: Request, call_next):
+    start_time = time.time()
     response = await call_next(request)
-    process_time = asyncio.get_event_loop().time() - start_time
-    response.headers["X-Process-Time"] = f"{process_time:.2f} secs"
+    duration = time.time() - start_time
+    response.headers["X-Process-Time"] = str(duration)
+    logger.info(f"Request path: {request.url.path}, Duration: {duration:.2f} seconds")
     return response
 
-# Manejador de errores personalizado para capturar excepciones HTTP
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
+@app.exception_handler(Exception)
+async def universal_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc} - URL: {request.url}")
     return JSONResponse(
-        status_code=exc.status_code,
-        content={"message": exc.detail}
+        status_code=500,
+        content={"message": "Internal server error"}
     )
 
 # Punto de entrada que maneja redirecciones y captura de errores de red
@@ -252,12 +255,19 @@ class CannibalizationRequest(BaseModel):
 
 @app.post("/analyze_cannibalization")
 async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
-    logger.info("Received request for cannibalization analysis.")
-    results = await analyze_cannibalization(request.processed_urls) 
-    if results.get("message"):
-        return {"message": results["message"]}
-    else:
-        return {"cannibalization_issues": results}
+    start_time = time.time()
+    try:
+        from analyze_cannibalization import analyze_cannibalization  # Ensure to import correctly
+        results = await analyze_cannibalization(request.processed_urls)
+        duration = time.time() - start_time
+        logger.info(f"Analysis completed in {duration:.2f} seconds")
+        return results
+    except HTTPException as http_exc:
+        logger.warning(f"HTTP error during cannibalization analysis: {http_exc.detail}")
+        raise
+    except Exception as exc:
+        logger.error(f"Error during cannibalization analysis: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 ##############################################
