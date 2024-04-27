@@ -15,12 +15,10 @@ import uvicorn
 from collections import Counter
 from typing import List, Dict, Optional
 from urllib.parse import urlparse
-import re
 import asyncio
 import time
 import requests
 import logging
-import os
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -29,6 +27,53 @@ logging.basicConfig(level=logging.DEBUG,
 logger = logging.getLogger("CannibalizationAnalysis")
 
 app = FastAPI(title="ErnieRank API")
+
+# Middleware para medir el tiempo de procesamiento
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    start_time = asyncio.get_event_loop().time()
+    response = await call_next(request)
+    process_time = asyncio.get_event_loop().time() - start_time
+    response.headers["X-Process-Time"] = f"{process_time:.2f} secs"
+    return response
+
+# Manejador de errores personalizado para capturar excepciones HTTP
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"message": exc.detail}
+    )
+
+# Punto de entrada que maneja redirecciones y captura de errores de red
+@app.get("/redirect/{url:path}")
+async def handle_redirect(url: str):
+    async with httpx.AsyncClient(follow_redirects=True) as client:
+        try:
+            response = await client.get(url)
+            if response.status_code == 404:
+                raise HTTPException(status_code=404, detail="Not Found")
+            return {"URL Final": str(response.url), "Status": response.status_code}
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=500, detail=f"Request Error: {str(e)}")
+
+# Manejador para la raíz que simplemente verifica la conectividad
+@app.get("/")
+async def read_root():
+    return {"Hello": "World"}
+
+@app.on_event("startup")
+async def startup_event():
+    app.state.client = httpx.AsyncClient()
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await app.state.client.aclose()
+
+# Simulación de un endpoint para manejar errores
+@app.get("/error")
+async def error_handler():
+    return {"message": "There was an error with your request."}
 
 class URLData(BaseModel):
     title: str

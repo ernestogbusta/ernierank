@@ -59,6 +59,10 @@ async def calculate_similarity(text1: str, text2: str) -> float:
 
 async def analyze_cannibalization(processed_urls: List[URLData]):
     """Analiza URLs de manera asincrónica para detectar canibalización."""
+    if not processed_urls:
+        logger.error("No URL data provided for cannibalization analysis.")
+        raise HTTPException(status_code=400, detail="No URL data provided")
+    
     results = []
     n = len(processed_urls)
     for i in range(n):
