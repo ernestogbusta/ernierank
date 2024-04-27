@@ -56,13 +56,10 @@ def analyze_cannibalization(processed_urls: List[URLData]):
             else:
                 continue  # No se considera canibalización si no alcanza el mínimo umbral
 
-            # Agrega los resultados a la lista
+            # Agrega solo los resultados necesarios a la lista
             results.append({
                 "url1": processed_urls[i].url,
                 "url2": processed_urls[j].url,
-                "title_similarity": sim_title,
-                "keyword_similarity": sim_main_keyword,
-                "semantic_similarity": sim_semantic,
                 "cannibalization_level": level
             })
 
