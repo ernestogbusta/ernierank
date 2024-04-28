@@ -5,44 +5,42 @@ from fastapi import HTTPException
 from pydantic import BaseModel
 from typing import List
 import logging
+import httpx
+from bs4 import BeautifulSoup
+import xmltodict
 
-logging.basicConfig(level=logging.INFO)  # Cambiar a DEBUG si se necesita más detalle en desarrollo
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("CannibalizationAnalysis")
 
-class URLData(BaseModel):
+class CannibalizationURLData(BaseModel):
     url: str
     title: str
 
-vectorizer = TfidfVectorizer(stop_words='english')  # Inicializar el vectorizador una vez
+vectorizer = TfidfVectorizer(stop_words='english')
 
 def clean_text(text: str) -> str:
-    """ Función para limpiar el texto, elimina caracteres no alfanuméricos y pasa a minúsculas. """
     return re.sub(r'\W+', ' ', text).lower()
 
 def should_analyze(url1: str, url2: str) -> bool:
-    """ Determina si dos URLs deben ser comparadas para canibalización basado en su estructura y contenido. """
-    # Extraer segmentos de URL que podrían indicar eventos específicos o versiones duplicadas
     if url1 == url2 or (url1.rstrip('/') == url2.rstrip('/')):
-        return False  # La misma URL o misma base sin importar el final "/"
+        return False
     slug1 = url1.strip('/').split('/')[-1]
     slug2 = url2.strip('/').split('/')[-1]
-    # Verificar si son slugs diferentes completamente y no son variantes directas de la misma página
     if slug1 != slug2 and not (slug1.startswith(slug2) or slug2.startswith(slug1)):
         return False
     return True
 
 async def calculate_similarity(matrix1, matrix2) -> float:
-    """ Calcula la similitud del coseno entre dos matrices pre-transformadas. """
     return cosine_similarity(matrix1, matrix2)[0][0]
 
-async def analyze_cannibalization(processed_urls: List[URLData]):
-    """ Analiza la canibalización entre URLs dadas usando la similitud del coseno en los títulos. """
+async def analyze_cannibalization(processed_urls: List[CannibalizationURLData]):
+    """Analiza la canibalización entre URLs dadas usando la similitud del coseno en los títulos."""
     if not processed_urls:
         logger.error("No URL data provided for cannibalization analysis.")
         raise HTTPException(status_code=400, detail="No URL data provided")
 
     texts = [clean_text(url.title) for url in processed_urls]
-    vectorizer.fit(texts)  # Ajustar el vectorizador una vez con todos los textos
+    vectorizer.fit(texts)
     transformed_matrices = [vectorizer.transform([text]) for text in texts]
 
     results = []
@@ -72,4 +70,25 @@ async def analyze_cannibalization(processed_urls: List[URLData]):
 
     return {"cannibalization_issues": results} if results else {"message": "No cannibalization detected"}
 
-# Asegúrate de que esta función sea llamada desde un endpoint de FastAPI adecuado.
+async def fetch_sitemap_urls(client, sitemap_url):
+    try:
+        response = await client.get(sitemap_url)
+        sitemap_contents = xmltodict.parse(response.content)
+        urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
+        return urls
+    except Exception as e:
+        logger.error(f"Error fetching sitemap: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch sitemap")
+
+async def extract_title_and_url(client, url):
+    try:
+        response = await client.get(url)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            title = soup.title.string if soup.title else ""
+            return CannibalizationURLData(url=url, title=title)
+        else:
+            return None
+    except Exception as e:
+        logger.error(f"Error fetching URL {url}: {str(e)}")
+        return None

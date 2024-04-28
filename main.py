@@ -7,7 +7,7 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
-from fastapi import FastAPI, HTTPException, Request, Body, status
+from fastapi import FastAPI, HTTPException, Request, Body, status, BackgroundTasks
 from fastapi.responses import JSONResponse
 import httpx
 from bs4 import BeautifulSoup
@@ -23,6 +23,7 @@ import asyncio
 import time
 import requests
 import logging
+from pydantic import BaseModel
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -69,6 +70,10 @@ async def read_root():
 @app.on_event("startup")
 async def startup_event():
     app.state.client = httpx.AsyncClient()
+    app.state.progress_file = "progress.json"
+    if not os.path.exists(app.state.progress_file):
+        with open(app.state.progress_file, 'w') as file:
+            json.dump({"current_index": 0, "urls": []}, file)
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -102,18 +107,6 @@ class BatchRequest(BaseModel):
     domain: str
     batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
-
-@app.on_event("startup")
-async def startup_event():
-    app.state.client = httpx.AsyncClient()
-    app.state.progress_file = "progress.json"
-    if not os.path.exists(app.state.progress_file):
-        with open(app.state.progress_file, 'w') as file:
-            json.dump({"current_index": 0, "urls": []}, file)
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    await app.state.client.aclose()
 
 
 ########## ANALYZE_URL ############
@@ -241,41 +234,29 @@ async def analyze_wpo_endpoint(request: WPORequest):
 ########### ANALIZE_CANNIBALIZATION ##########
 
 
-# Definiciones de modelos
-class URLData(BaseModel):
-    url: str
-    title: str
-    meta_description: str
-    main_keyword: str
-    secondary_keywords: List[str]
-    semantic_search_intent: str
-
-class CannibalizationRequest(BaseModel):
-    processed_urls: List[URLData]
-    more_batches: Optional[bool] = False
-    next_batch_start: Optional[int] = None
-
 # Importación diferida dentro del endpoint para reducir el tiempo de carga inicial
 def import_analyze_func():
     from analyze_cannibalization import analyze_cannibalization
     return analyze_cannibalization
 
+class CannibalizationURLData(BaseModel):
+    url: str
+    title: str
+    meta_description: Optional[str] = None
+    main_keyword: Optional[str] = None
+    secondary_keywords: List[str] = []
+    semantic_search_intent: Optional[str] = None
+
+class ProcessCannibalizationRequest(BaseModel):
+    processed_urls: List[CannibalizationURLData]
+    more_batches: Optional[bool] = False
+    next_batch_start: Optional[int] = None
+
 @app.post("/analyze_cannibalization")
-async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
-    start_time = time.time()
-    logger.info(f"Received request for cannibalization analysis for {len(request.processed_urls)} URLs.")
-    try:
-        analyze = import_analyze_func()  # Importar solo cuando sea necesario
-        results = await analyze(request.processed_urls)
-        duration = time.time() - start_time
-        logger.info(f"Analysis completed in {duration:.2f} seconds")
-        return JSONResponse(status_code=status.HTTP_200_OK, content=results)
-    except HTTPException as http_exc:
-        logger.warning(f"HTTP error during cannibalization analysis: {http_exc.detail}", exc_info=True)
-        return JSONResponse(status_code=http_exc.status_code, content={"message": http_exc.detail})
-    except Exception as exc:
-        logger.error(f"Unexpected error during cannibalization analysis: {exc}", exc_info=True)
-        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": "An unexpected error occurred"})
+async def analyze_cannibalization_endpoint(request: ProcessCannibalizationRequest):
+    results = await analyze_cannibalization(request.processed_urls)
+    return results
+
 
 
 
