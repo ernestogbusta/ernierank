@@ -240,26 +240,23 @@ def import_analyze_func():
     from analyze_cannibalization import analyze_cannibalization
     return analyze_cannibalization
 
-# Modelo para la solicitud de análisis de canibalización
 class CannibalizationRequest(BaseModel):
     processed_urls: List[URLData]
 
-@app.post("/analyze_cannibalization")
-async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
-    start_time = time.time()
-    try:
-        results = await analyze_cannibalization(request.processed_urls)
-        duration = time.time() - start_time
-        logger.info(f"Analysis completed in {duration:.2f} seconds")
-        return results
-    except HTTPException as http_exc:
-        logger.warning(f"HTTP error during cannibalization analysis: {http_exc.detail}")
-        raise
-    except Exception as exc:
-        logger.error(f"Error during cannibalization analysis: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))
+class CannibalizationResult(BaseModel):
+    url1: HttpUrl
+    url2: HttpUrl
+    cannibalization_level: str
 
-        raise HTTPException(status_code=500, detail=str(exc))
+@app.post("/analyze_cannibalization", response_model=List[CannibalizationResult])
+async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
+    # Aquí deberías incluir la lógica real de análisis
+    # Simulando una respuesta
+    return [{
+        "url1": request.processed_urls[0].url,
+        "url2": request.processed_urls[1].url,
+        "cannibalization_level": "Alta"
+    }]
 
 
 
