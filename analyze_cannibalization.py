@@ -1,15 +1,11 @@
-# analyze_cannibalization.py
-
+from fastapi import HTTPException
+from pydantic import BaseModel, HttpUrl
+from typing import List
+import logging
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import re
-from fastapi import HTTPException
-from pydantic import BaseModel, HttpUrl
-from typing import List, Optional
-import logging
-import httpx
-from bs4 import BeautifulSoup
-import xmltodict
+import asyncio
 
 # Configuración de logging
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +15,11 @@ logger = logging.getLogger("CannibalizationAnalysis")
 class CannibalizationURLData(BaseModel):
     url: HttpUrl
     title: str
+
+class CannibalizationResult(BaseModel):
+    url1: HttpUrl
+    url2: HttpUrl
+    cannibalization_level: str
 
 # Inicialización de TfidfVectorizer
 vectorizer = TfidfVectorizer(stop_words='english')
@@ -55,23 +56,23 @@ async def analyze_cannibalization(processed_urls: List[CannibalizationURLData]):
             if should_analyze(processed_urls[i].url, processed_urls[j].url):
                 sim = await calculate_similarity(transformed_matrices[i], transformed_matrices[j])
                 if sim > 0.9:
-                    level = "Alta"
+                    level = "High"
                 elif sim > 0.6:
-                    level = "Media"
+                    level = "Medium"
                 elif sim > 0.4:
-                    level = "Baja"
+                    level = "Low"
                 else:
                     continue
-                results.append({
-                    "url1": processed_urls[i].url,
-                    "url2": processed_urls[j].url,
-                    "cannibalization_level": level
-                })
+                results.append(CannibalizationResult(
+                    url1=processed_urls[i].url,
+                    url2=processed_urls[j].url,
+                    cannibalization_level=level
+                ))
 
     if results:
         logger.info(f"Cannibalization analysis completed with results: {results}")
     else:
         logger.info("No cannibalization detected")
 
-    return {"cannibalization_issues": results} if results else {"message": "No cannibalization detected"}
+    return results if results else {"message": "No cannibalization detected"}
 
