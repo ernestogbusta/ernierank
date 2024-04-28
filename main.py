@@ -22,7 +22,7 @@ from urllib.parse import urlparse
 import asyncio
 import time
 import requests
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 import logging
 
 # Configuración del logger
@@ -85,11 +85,12 @@ async def error_handler():
     return {"message": "There was an error with your request."}
 
 class URLData(BaseModel):
+    url: HttpUrl
     title: str
-    h1: str
-    main_keyword: str
-    secondary_keywords: List[str]
-    semantic_search_intent: str
+    h1: Optional[str] = None  # Hacemos este campo opcional
+    main_keyword: Optional[str]
+    secondary_keywords: List[str] = []
+    semantic_search_intent: Optional[str]
 
 @app.post("/test")
 async def test_logging(data: List[URLData]):
@@ -239,32 +240,26 @@ def import_analyze_func():
     from analyze_cannibalization import analyze_cannibalization
     return analyze_cannibalization
 
-class CannibalizationURLData(BaseModel):
-    url: str
-    title: str
-    meta_description: Optional[str] = None
-    main_keyword: Optional[str] = None
-    secondary_keywords: List[str] = []
-    semantic_search_intent: Optional[str] = None
-
-class ProcessCannibalizationRequest(BaseModel):
-    processed_urls: List[CannibalizationURLData]
-    more_batches: Optional[bool] = False
-    next_batch_start: Optional[int] = None
+# Modelo para la solicitud de análisis de canibalización
+class CannibalizationRequest(BaseModel):
+    processed_urls: List[URLData]
 
 @app.post("/analyze_cannibalization")
-async def analyze_cannibalization_endpoint(request: ProcessCannibalizationRequest):
-    logger.info(f"Received request for cannibalization analysis with {len(request.processed_urls)} URLs.")
+async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
+    start_time = time.time()
     try:
         results = await analyze_cannibalization(request.processed_urls)
-        logger.info("Successfully analyzed cannibalization.")
+        duration = time.time() - start_time
+        logger.info(f"Analysis completed in {duration:.2f} seconds")
         return results
-    except HTTPException as e:
-        logger.error(f"HTTP error during cannibalization analysis: {str(e)}")
+    except HTTPException as http_exc:
+        logger.warning(f"HTTP error during cannibalization analysis: {http_exc.detail}")
         raise
-    except Exception as e:
-        logger.error(f"Unexpected error during cannibalization analysis: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+    except Exception as exc:
+        logger.error(f"Error during cannibalization analysis: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 
