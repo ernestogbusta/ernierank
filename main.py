@@ -256,18 +256,21 @@ class CannibalizationRequest(BaseModel):
 @app.post("/analyze_cannibalization")
 async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
     start_time = time.time()
+    logger.info(f"Received request for cannibalization analysis for {len(request.processed_urls)} URLs.")
     try:
-        from analyze_cannibalization import analyze_cannibalization  # Ensure to import correctly
+        from analyze_cannibalization import analyze_cannibalization  # Asegura la correcta importación
         results = await analyze_cannibalization(request.processed_urls)
         duration = time.time() - start_time
         logger.info(f"Analysis completed in {duration:.2f} seconds")
-        return results
+        if results.get("message"):
+            return {"message": results["message"]}
+        return {"cannibalization_issues": results}
     except HTTPException as http_exc:
         logger.warning(f"HTTP error during cannibalization analysis: {http_exc.detail}")
         raise
     except Exception as exc:
-        logger.error(f"Error during cannibalization analysis: {exc}")
-        raise HTTPException(status_code=500, detail=str(exc))
+        logger.error(f"Unexpected error during cannibalization analysis: {exc}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
 
 
 ##############################################

@@ -26,18 +26,23 @@ pattern = re.compile(r'\W+')
 
 def clean_text(text: str) -> str:
     """Normaliza el texto eliminando caracteres especiales y stopwords."""
-    return pattern.sub(' ', text).lower()
+    cleaned_text = pattern.sub(' ', text).lower()
+    logger.debug(f"Text cleaned: {cleaned_text}")
+    return cleaned_text
 
 async def get_from_cache(key):
     """Obtiene un valor del caché si no ha expirado."""
     item = cache.get(key)
     if item:
+        logger.debug(f"Cache hit for key: {key}")
         return item
+    logger.debug(f"Cache miss for key: {key}")
     return None
 
 async def set_to_cache(key, value, duration=3600):
     """Guarda un valor en el caché con un tiempo de expiración."""
     cache[key] = (value, duration)
+    logger.debug(f"Value set in cache for key: {key} with expiration: {duration}")
 
 async def calculate_similarity(text1: str, text2: str) -> float:
     """Calcula la similitud del coseno entre dos textos utilizando caché."""
@@ -51,6 +56,7 @@ async def calculate_similarity(text1: str, text2: str) -> float:
     cosine_sim = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:])[0][0]
     
     await set_to_cache(hash_key, str(cosine_sim))
+    logger.debug(f"Calculated cosine similarity: {cosine_sim} for texts: [{text1}], [{text2}]")
     return cosine_sim
 
 async def analyze_cannibalization(processed_urls: List[URLData]):
@@ -60,6 +66,7 @@ async def analyze_cannibalization(processed_urls: List[URLData]):
         raise HTTPException(status_code=400, detail="No URL data provided")
     
     results = []
+    logger.info(f"Starting cannibalization analysis for {len(processed_urls)} URLs.")
     for i in range(len(processed_urls)):
         for j in range(i + 1, len(processed_urls)):
             sim_title = await calculate_similarity(clean_text(processed_urls[i].title), clean_text(processed_urls[j].title))
@@ -80,5 +87,10 @@ async def analyze_cannibalization(processed_urls: List[URLData]):
                 "url2": processed_urls[j].url,
                 "cannibalization_level": level
             })
+            logger.debug(f"Cannibalization issue detected: {results[-1]}")
 
+    if results:
+        logger.info(f"Cannibalization analysis completed with results: {results}")
+    else:
+        logger.info("No cannibalization detected")
     return {"cannibalization_issues": results} if results else {"message": "No cannibalization detected"}
