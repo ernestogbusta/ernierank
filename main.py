@@ -1,10 +1,6 @@
 import cProfile
 import pstats
 import io
-from analyze_url import analyze_url
-from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
-from analyze_wpo import analyze_wpo
-from analyze_cannibalization import analyze_cannibalization
 from fastapi import FastAPI, HTTPException, Request, Body, status, BackgroundTasks
 from fastapi.responses import JSONResponse
 import httpx
@@ -12,7 +8,7 @@ from bs4 import BeautifulSoup
 import xmltodict
 import os
 import json
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 import uvicorn
 from collections import Counter
 from typing import List, Dict, Optional
@@ -22,6 +18,10 @@ import time
 import requests
 from pydantic import BaseModel, HttpUrl
 import logging
+from analyze_url import analyze_url
+from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
+from analyze_wpo import analyze_wpo
+from analyze_cannibalization import analyze_cannibalization
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -212,6 +212,10 @@ class CannibalizationResult(BaseModel):
     url1: HttpUrl
     url2: HttpUrl
     cannibalization_level: str
+
+class CannibalizationURLData(BaseModel):
+    url: HttpUrl
+    title: str
 
 @app.post("/analyze_cannibalization", response_model=List[CannibalizationResult])
 async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
