@@ -23,6 +23,7 @@ import asyncio
 import time
 import requests
 from pydantic import BaseModel
+import logging
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
