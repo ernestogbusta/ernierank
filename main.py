@@ -1,5 +1,3 @@
-# main.py
-
 import cProfile
 import pstats
 import io
@@ -50,7 +48,6 @@ async def universal_exception_handler(request: Request, exc: Exception):
         content={"message": "Internal server error"}
     )
 
-# Punto de entrada que maneja redirecciones y captura de errores de red
 @app.get("/redirect/{url:path}")
 async def handle_redirect(url: str):
     async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -60,9 +57,9 @@ async def handle_redirect(url: str):
                 raise HTTPException(status_code=404, detail="Not Found")
             return {"URL Final": str(response.url), "Status": response.status_code}
         except httpx.RequestError as e:
+            logger.error(f"Request Error: {str(e)} - URL: {url}")
             raise HTTPException(status_code=500, detail=f"Request Error: {str(e)}")
 
-# Manejador para la raíz que simplemente verifica la conectividad
 @app.get("/")
 async def read_root():
     return {"Hello": "World"}
@@ -79,7 +76,6 @@ async def startup_event():
 async def shutdown_event():
     await app.state.client.aclose()
 
-# Simulación de un endpoint para manejar errores
 @app.get("/error")
 async def error_handler():
     return {"message": "There was an error with your request."}
@@ -87,7 +83,7 @@ async def error_handler():
 class URLData(BaseModel):
     url: HttpUrl
     title: str
-    h1: Optional[str] = None  # Hacemos este campo opcional
+    h1: Optional[str] = None
     main_keyword: Optional[str]
     secondary_keywords: List[str] = []
     semantic_search_intent: Optional[str]
@@ -99,38 +95,32 @@ async def test_logging(data: List[URLData]):
         logger.info("No data provided.")
         return {"message": "No data provided."}
     else:
-        # Simulate processing
         logger.info("Processing data...")
         return {"message": "Data processed."}
 
-
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int = 100  # valor por defecto
-    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
-
-
-########## ANALYZE_URL ############
+    batch_size: int = 100
+    start: int = 0
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    print(f"Fetching URLs from: {sitemap_url}")
+    logger.info(f"Fetching URLs from: {sitemap_url}")
     urls = await fetch_sitemap(app.state.client, sitemap_url)
 
     if not urls:
-        print("No URLs found in the sitemap.")
+        logger.error("No URLs found in the sitemap.")
         raise HTTPException(status_code=404, detail="Sitemap not found or empty")
-    
-    print(f"Total URLs fetched for processing: {len(urls)}")
+
+    logger.info(f"Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
-    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
+    logger.info(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
     tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
     results = await asyncio.gather(*tasks)
-    print(f"Results received: {results}")
+    logger.info(f"Results received: {results}")
 
-    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
     valid_results = [
         {
             "url": result['url'],
@@ -141,11 +131,11 @@ async def process_urls_in_batches(request: BatchRequest):
             "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
         } for result in results if result
     ]
-    print(f"Filtered results: {valid_results}")
+    logger.info(f"Filtered results: {valid_results}")
 
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
-    print(f"More batches: {more_batches}, Next batch start index: {next_start}")
+    logger.info(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
         "processed_urls": valid_results,
@@ -177,17 +167,11 @@ async def fetch_sitemap(client, url):
         elif 'urlset' in sitemap_contents:
             all_urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
 
-        print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
+        logger.info(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
         return all_urls
     except Exception as e:
-        print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
-        return None
-
-############################################
-
-
-
-########## ANALYZE_INTERNAL_LINKS ##########
+        logger.error(f"Error fetching or parsing sitemap from {url}: {str(e)}")
+        return []
 
 @app.post("/analyze_internal_links", response_model=InternalLinkAnalysis)
 async def handle_analyze_internal_links(domain: str = Body(..., embed=True)):
@@ -196,46 +180,27 @@ async def handle_analyze_internal_links(domain: str = Body(..., embed=True)):
         result = await analyze_internal_links(corrected_domain, client)
         return result
 
-
-############################################
-
-
-
-
-########## ANALYZE_WPO ##########
-
-
 def check_server_availability(url):
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         return True
     except requests.exceptions.RequestException as e:
-        print(f"Server not available for {url}: {str(e)}")
+        logger.error(f"Server not available for {url}: {str(e)}")
         return False
 
-# Llamada a la función
 if check_server_availability('https://example.com'):
-    print("Procede con la obtención del tamaño de los recursos")
+    logger.info("Server is available.")
 else:
-    print("El servidor no está disponible. Intenta más tarde.")
+    logger.error("Server is not available.")
 
 class WPORequest(BaseModel):
     url: str
 
 @app.post("/analyze_wpo")
 async def analyze_wpo_endpoint(request: WPORequest):
-    # Asegúrate de pasar la URL como argumento a la función analyze_wpo
     return await analyze_wpo(request.url)
 
-###############################################
-
-
-
-########### ANALIZE_CANNIBALIZATION ##########
-
-
-# Importación diferida dentro del endpoint para reducir el tiempo de carga inicial
 def import_analyze_func():
     from analyze_cannibalization import analyze_cannibalization
     return analyze_cannibalization
@@ -250,23 +215,8 @@ class CannibalizationResult(BaseModel):
 
 @app.post("/analyze_cannibalization", response_model=List[CannibalizationResult])
 async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
-    # Aquí deberías incluir la lógica real de análisis
-    # Simulando una respuesta
-    return [{
-        "url1": request.processed_urls[0].url,
-        "url2": request.processed_urls[1].url,
-        "cannibalization_level": "Alta"
-    }]
-
-
-
-
-
-##############################################
-
-
+    analyze_func = import_analyze_func()
+    return await analyze_func(request.processed_urls)
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=10000, log_level="debug")
-
