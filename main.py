@@ -7,7 +7,8 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
-from fastapi import FastAPI, HTTPException, Request, Body
+from fastapi import FastAPI, HTTPException, Request, Body, status
+from fastapi.responses import JSONResponse
 import httpx
 from bs4 import BeautifulSoup
 import xmltodict
@@ -240,6 +241,7 @@ async def analyze_wpo_endpoint(request: WPORequest):
 ########### ANALIZE_CANNIBALIZATION ##########
 
 
+# Definiciones de modelos
 class URLData(BaseModel):
     url: str
     title: str
@@ -253,24 +255,28 @@ class CannibalizationRequest(BaseModel):
     more_batches: Optional[bool] = False
     next_batch_start: Optional[int] = None
 
+# Importación diferida dentro del endpoint para reducir el tiempo de carga inicial
+def import_analyze_func():
+    from analyze_cannibalization import analyze_cannibalization
+    return analyze_cannibalization
+
 @app.post("/analyze_cannibalization")
 async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
     start_time = time.time()
     logger.info(f"Received request for cannibalization analysis for {len(request.processed_urls)} URLs.")
     try:
-        from analyze_cannibalization import analyze_cannibalization  # Asegura la correcta importación
-        results = await analyze_cannibalization(request.processed_urls)
+        analyze = import_analyze_func()  # Importar solo cuando sea necesario
+        results = await analyze(request.processed_urls)
         duration = time.time() - start_time
         logger.info(f"Analysis completed in {duration:.2f} seconds")
-        if results.get("message"):
-            return {"message": results["message"]}
-        return {"cannibalization_issues": results}
+        return JSONResponse(status_code=status.HTTP_200_OK, content=results)
     except HTTPException as http_exc:
-        logger.warning(f"HTTP error during cannibalization analysis: {http_exc.detail}")
-        raise
+        logger.warning(f"HTTP error during cannibalization analysis: {http_exc.detail}", exc_info=True)
+        return JSONResponse(status_code=http_exc.status_code, content={"message": http_exc.detail})
     except Exception as exc:
         logger.error(f"Unexpected error during cannibalization analysis: {exc}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred")
+        return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"message": "An unexpected error occurred"})
+
 
 
 ##############################################
