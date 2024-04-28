@@ -21,7 +21,7 @@ import logging
 from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
-from analyze_cannibalization import analyze_cannibalization
+from analyze_cannibalization import analyze_cannibalization, CannibalizationURLData, fetch_sitemap_urls, extract_title_and_url
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -201,26 +201,29 @@ class WPORequest(BaseModel):
 async def analyze_wpo_endpoint(request: WPORequest):
     return await analyze_wpo(request.url)
 
-def import_analyze_func():
-    from analyze_cannibalization import analyze_cannibalization
-    return analyze_cannibalization
-
 class CannibalizationRequest(BaseModel):
-    processed_urls: List[URLData]
+    processed_urls: List[CannibalizationURLData]
 
 class CannibalizationResult(BaseModel):
     url1: HttpUrl
     url2: HttpUrl
     cannibalization_level: str
 
-class CannibalizationURLData(BaseModel):
-    url: HttpUrl
-    title: str
+@app.post("/analyze_cannibalization/", response_model=List[CannibalizationResult])
+async def analyze_cannibalization_endpoint(data: CannibalizationRequest):
+    logger.debug(f"Received request with data: {data}")
+    try:
+        # Llamar a la función de análisis con la lista de URLs procesadas
+        results = await analyze_cannibalization(data.processed_urls)
+        if results:
+            logger.info(f"Cannibalization analysis completed successfully with results: {results}")
+        else:
+            logger.info("No cannibalization issues detected.")
+        return results
+    except Exception as e:
+        logger.error(f"Error during cannibalization analysis: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/analyze_cannibalization", response_model=List[CannibalizationResult])
-async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
-    analyze_func = import_analyze_func()
-    return await analyze_func(request.processed_urls)
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000, log_level="debug")

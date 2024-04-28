@@ -1,8 +1,8 @@
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import re
-from fastapi import HTTPException
-from pydantic import BaseModel, HttpUrl
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, HttpUrl, ValidationError
 from typing import List
 import logging
 import asyncio
@@ -13,6 +13,8 @@ import xmltodict
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("CannibalizationAnalysis")
 
+app = FastAPI()
+
 class CannibalizationURLData(BaseModel):
     url: HttpUrl
     title: str
@@ -21,19 +23,26 @@ vectorizer = TfidfVectorizer(stop_words='english')
 
 def clean_text(text: str) -> str:
     """ Limpiar el texto eliminando caracteres no alfanuméricos y convirtiéndolos a minúsculas. """
-    return re.sub(r'\W+', ' ', text).lower()
+    cleaned_text = re.sub(r'\W+', ' ', text).lower()
+    logger.debug(f"Text cleaned: {cleaned_text}")
+    return cleaned_text
 
 def should_analyze(url1: HttpUrl, url2: HttpUrl) -> bool:
     """ Determinar si se debe analizar canibalización entre dos URLs. """
     if url1 == url2 or (url1.rstrip('/') == url2.rstrip('/')):
+        logger.debug("URLs are identical or canonical, skipping analysis.")
         return False
     slug1 = url1.strip('/').split('/')[-1]
     slug2 = url2.strip('/').split('/')[-1]
-    return slug1 != slug2 and (slug1.startswith(slug2) or slug2.startswith(slug1))
+    should = slug1 != slug2 and (slug1.startswith(slug2) or slug2.startswith(slug1))
+    logger.debug(f"Should analyze between {url1} and {url2}: {should}")
+    return should
 
 async def calculate_similarity(matrix1, matrix2) -> float:
     """ Calcular la similitud del coseno entre dos matrices de términos TF-IDF. """
-    return cosine_similarity(matrix1, matrix2)[0][0]
+    similarity = cosine_similarity(matrix1, matrix2)[0][0]
+    logger.debug(f"Calculated cosine similarity: {similarity}")
+    return similarity
 
 async def analyze_cannibalization(processed_urls: List[CannibalizationURLData]):
     """ Analizar la canibalización entre URLs usando la similitud del coseno en los títulos. """
@@ -78,6 +87,7 @@ async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str):
         response = await client.get(sitemap_url)
         sitemap_contents = xmltodict.parse(response.content)
         urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
+        logger.debug(f"URLs fetched from sitemap: {urls}")
         return urls
     except Exception as e:
         logger.error(f"Error fetching sitemap: {str(e)}")
@@ -90,8 +100,10 @@ async def extract_title_and_url(client: httpx.AsyncClient, url: str):
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
             title = soup.title.string if soup.title else ""
+            logger.debug(f"Title extracted for URL {url}: {title}")
             return CannibalizationURLData(url=url, title=title)
         else:
+            logger.error(f"Failed to fetch valid response for URL {url}: Status code {response.status_code}")
             return None
     except Exception as e:
         logger.error(f"Error fetching URL {url}: {str(e)}")
