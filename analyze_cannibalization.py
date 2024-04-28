@@ -34,11 +34,11 @@ async def calculate_similarity(matrix1, matrix2) -> float:
     return cosine_similarity(matrix1, matrix2)[0][0]
 
 async def analyze_cannibalization(processed_urls: List[CannibalizationURLData]):
-    """Analiza la canibalización entre URLs dadas usando la similitud del coseno en los títulos."""
     if not processed_urls:
         logger.error("No URL data provided for cannibalization analysis.")
         raise HTTPException(status_code=400, detail="No URL data provided")
 
+    logger.info("Starting the cannibalization analysis.")
     texts = [clean_text(url.title) for url in processed_urls]
     vectorizer.fit(texts)
     transformed_matrices = [vectorizer.transform([text]) for text in texts]
@@ -46,22 +46,22 @@ async def analyze_cannibalization(processed_urls: List[CannibalizationURLData]):
     results = []
     for i in range(len(processed_urls)):
         for j in range(i + 1, len(processed_urls)):
-            if not should_analyze(processed_urls[i].url, processed_urls[j].url):
-                continue
-            sim = await calculate_similarity(transformed_matrices[i], transformed_matrices[j])
-            if sim > 0.9:
-                level = "Alta"
-            elif sim > 0.6:
-                level = "Media"
-            elif sim > 0.4:
-                level = "Baja"
-            else:
-                continue
-            results.append({
-                "url1": processed_urls[i].url,
-                "url2": processed_urls[j].url,
-                "cannibalization_level": level
-            })
+            if should_analyze(processed_urls[i].url, processed_urls[j].url):
+                sim = await calculate_similarity(transformed_matrices[i], transformed_matrices[j])
+                level = "None"
+                if sim > 0.9:
+                    level = "Alta"
+                elif sim > 0.6:
+                    level = "Media"
+                elif sim > 0.4:
+                    level = "Baja"
+                if level != "None":
+                    results.append({
+                        "url1": processed_urls[i].url,
+                        "url2": processed_urls[j].url,
+                        "cannibalization_level": level
+                    })
+                logger.debug(f"Processed pair: {processed_urls[i].url} and {processed_urls[j].url} with similarity {sim} and level {level}")
 
     if results:
         logger.info(f"Cannibalization analysis completed with results: {results}")

@@ -22,7 +22,6 @@ from urllib.parse import urlparse
 import asyncio
 import time
 import requests
-import logging
 from pydantic import BaseModel
 
 # Configuración del logger
@@ -254,8 +253,18 @@ class ProcessCannibalizationRequest(BaseModel):
 
 @app.post("/analyze_cannibalization")
 async def analyze_cannibalization_endpoint(request: ProcessCannibalizationRequest):
-    results = await analyze_cannibalization(request.processed_urls)
-    return results
+    logger.info(f"Received request for cannibalization analysis with {len(request.processed_urls)} URLs.")
+    try:
+        results = await analyze_cannibalization(request.processed_urls)
+        logger.info("Successfully analyzed cannibalization.")
+        return results
+    except HTTPException as e:
+        logger.error(f"HTTP error during cannibalization analysis: {str(e)}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error during cannibalization analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 
 
 
