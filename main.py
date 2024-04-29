@@ -3,6 +3,7 @@ import pstats
 import io
 from fastapi import FastAPI, HTTPException, Request, Body, status, BackgroundTasks
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 import httpx
 from bs4 import BeautifulSoup
 import xmltodict
@@ -22,6 +23,7 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization, CannibalizationURLData, fetch_sitemap_urls, extract_title_and_url
+from typing import List
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -201,6 +203,10 @@ class WPORequest(BaseModel):
 async def analyze_wpo_endpoint(request: WPORequest):
     return await analyze_wpo(request.url)
 
+class CannibalizationURLData(BaseModel):
+    url: HttpUrl
+    title: str
+
 class CannibalizationRequest(BaseModel):
     processed_urls: List[CannibalizationURLData]
 
@@ -209,21 +215,18 @@ class CannibalizationResult(BaseModel):
     url2: HttpUrl
     cannibalization_level: str
 
-@app.post("/analyze_cannibalization/", response_model=List[CannibalizationResult])
+@app.post("/analyze_cannibalization/", response_model=List[CannibalizationResult], status_code=status.HTTP_200_OK)
 async def analyze_cannibalization_endpoint(data: CannibalizationRequest):
-    logger.debug(f"Received request with data: {data}")
+    logger.debug(f"Received data for cannibalization analysis: {data}")
     try:
-        # Llamar a la función de análisis con la lista de URLs procesadas
         results = await analyze_cannibalization(data.processed_urls)
-        if results:
-            logger.info(f"Cannibalization analysis completed successfully with results: {results}")
-        else:
-            logger.info("No cannibalization issues detected.")
         return results
+    except ValidationError as ve:
+        logger.error(f"Validation error: {ve.errors()}")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ve.errors())
     except Exception as e:
-        logger.error(f"Error during cannibalization analysis: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+        logger.error(f"Unexpected error during cannibalization analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=10000, log_level="debug")

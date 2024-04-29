@@ -23,26 +23,19 @@ vectorizer = TfidfVectorizer(stop_words='english')
 
 def clean_text(text: str) -> str:
     """ Limpiar el texto eliminando caracteres no alfanuméricos y convirtiéndolos a minúsculas. """
-    cleaned_text = re.sub(r'\W+', ' ', text).lower()
-    logger.debug(f"Text cleaned: {cleaned_text}")
-    return cleaned_text
+    return re.sub(r'\W+', ' ', text).lower()
 
 def should_analyze(url1: HttpUrl, url2: HttpUrl) -> bool:
     """ Determinar si se debe analizar canibalización entre dos URLs. """
     if url1 == url2 or (url1.rstrip('/') == url2.rstrip('/')):
-        logger.debug("URLs are identical or canonical, skipping analysis.")
         return False
     slug1 = url1.strip('/').split('/')[-1]
     slug2 = url2.strip('/').split('/')[-1]
-    should = slug1 != slug2 and (slug1.startswith(slug2) or slug2.startswith(slug1))
-    logger.debug(f"Should analyze between {url1} and {url2}: {should}")
-    return should
+    return slug1 != slug2 and (slug1.startswith(slug2) or slug2.startswith(slug1))
 
 async def calculate_similarity(matrix1, matrix2) -> float:
     """ Calcular la similitud del coseno entre dos matrices de términos TF-IDF. """
-    similarity = cosine_similarity(matrix1, matrix2)[0][0]
-    logger.debug(f"Calculated cosine similarity: {similarity}")
-    return similarity
+    return cosine_similarity(matrix1, matrix2)[0][0]
 
 async def analyze_cannibalization(processed_urls: List[CannibalizationURLData]):
     """ Analizar la canibalización entre URLs usando la similitud del coseno en los títulos. """
@@ -50,36 +43,38 @@ async def analyze_cannibalization(processed_urls: List[CannibalizationURLData]):
         logger.error("No URL data provided for cannibalization analysis.")
         raise HTTPException(status_code=400, detail="No URL data provided")
 
-    texts = [clean_text(url.title) for url in processed_urls]
-    vectorizer.fit(texts)
-    transformed_matrices = [vectorizer.transform([text]) for text in texts]
+    try:
+        texts = [clean_text(url.title) for url in processed_urls]
+        vectorizer.fit(texts)
+        transformed_matrices = [vectorizer.transform([text]) for text in texts]
 
-    results = []
-    for i in range(len(processed_urls)):
-        for j in range(i + 1, len(processed_urls)):
-            if should_analyze(processed_urls[i].url, processed_urls[j].url):
-                sim = await calculate_similarity(transformed_matrices[i], transformed_matrices[j])
-                level = "None"
-                if sim > 0.9:
-                    level = "Alta"
-                elif sim > 0.6:
-                    level = "Media"
-                elif sim > 0.4:
-                    level = "Baja"
-                if level != "None":
-                    results.append({
-                        "url1": processed_urls[i].url,
-                        "url2": processed_urls[j].url,
-                        "cannibalization_level": level
-                    })
-                logger.debug(f"Processed pair: {processed_urls[i].url} and {processed_urls[j].url} with similarity {sim} and level {level}")
-
-    if results:
-        logger.info(f"Cannibalization analysis completed with results: {results}")
-    else:
-        logger.info("No cannibalization detected")
-
-    return results if results else [{"message": "No cannibalization detected"}]
+        results = []
+        for i in range(len(processed_urls)):
+            for j in range(i + 1, len(processed_urls)):
+                if should_analyze(processed_urls[i].url, processed_urls[j].url):
+                    sim = await calculate_similarity(transformed_matrices[i], transformed_matrices[j])
+                    level = "None"
+                    if sim > 0.9:
+                        level = "Alta"
+                    elif sim > 0.6:
+                        level = "Media"
+                    elif sim > 0.4:
+                        level = "Baja"
+                    if level != "None":
+                        results.append({
+                            "url1": processed_urls[i].url,
+                            "url2": processed_urls[j].url,
+                            "cannibalization_level": level
+                        })
+                    logger.debug(f"Processed pair: {processed_urls[i].url} and {processed_urls[j].url} with similarity {sim} and level {level}")
+        if results:
+            logger.info(f"Cannibalization analysis completed with results: {results}")
+        else:
+            logger.info("No cannibalization detected")
+        return results if results else [{"message": "No cannibalization detected"}]
+    except Exception as e:
+        logger.error(f"Error during cannibalization analysis: {e}")
+        raise HTTPException(status_code=500, detail="Error processing cannibalization analysis")
 
 async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str):
     """ Obtener URLs desde un sitemap. """
