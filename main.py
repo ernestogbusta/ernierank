@@ -1,29 +1,25 @@
-import cProfile
-import pstats
-import io
-from fastapi import FastAPI, HTTPException, Request, Body, status, BackgroundTasks
-from fastapi.responses import JSONResponse
-from fastapi.encoders import jsonable_encoder
+# main.py
+
+from analyze_url import analyze_url
+from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
+from analyze_wpo import analyze_wpo
+from analyze_cannibalization import analyze_cannibalization, CannibalizationURLData, analyze_url_for_cannibalization
+from fastapi import FastAPI, HTTPException, Request, Body
 import httpx
 from bs4 import BeautifulSoup
 import xmltodict
 import os
 import json
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel
 import uvicorn
 from collections import Counter
 from typing import List, Dict, Optional
 from urllib.parse import urlparse
+import re
 import asyncio
 import time
 import requests
-from pydantic import BaseModel, HttpUrl
 import logging
-from analyze_url import analyze_url
-from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
-from analyze_wpo import analyze_wpo
-from analyze_cannibalization import analyze_cannibalization, CannibalizationURLData, fetch_sitemap_urls, extract_title_and_url
-from typing import List
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -33,38 +29,30 @@ logger = logging.getLogger("CannibalizationAnalysis")
 
 app = FastAPI(title="ErnieRank API")
 
-@app.middleware("http")
-async def log_process_time(request: Request, call_next):
-    start_time = time.time()
-    response = await call_next(request)
-    duration = time.time() - start_time
-    response.headers["X-Process-Time"] = str(duration)
-    logger.info(f"Request path: {request.url.path}, Duration: {duration:.2f} seconds")
-    return response
+class URLData(BaseModel):
+    url: str
+    title: str
+    meta_description: str
+    main_keyword: str
+    secondary_keywords: List[str]
+    semantic_search_intent: str
 
-@app.exception_handler(Exception)
-async def universal_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc} - URL: {request.url}")
-    return JSONResponse(
-        status_code=500,
-        content={"message": "Internal server error"}
-    )
+@app.post("/test")
+async def test_logging(data: List[URLData]):
+    logger.debug(f"Received data: {data}")
+    if not data:
+        logger.info("No data provided.")
+        return {"message": "No data provided."}
+    else:
+        # Simulate processing
+        logger.info("Processing data...")
+        return {"message": "Data processed."}
 
-@app.get("/redirect/{url:path}")
-async def handle_redirect(url: str):
-    async with httpx.AsyncClient(follow_redirects=True) as client:
-        try:
-            response = await client.get(url)
-            if response.status_code == 404:
-                raise HTTPException(status_code=404, detail="Not Found")
-            return {"URL Final": str(response.url), "Status": response.status_code}
-        except httpx.RequestError as e:
-            logger.error(f"Request Error: {str(e)} - URL: {url}")
-            raise HTTPException(status_code=500, detail=f"Request Error: {str(e)}")
 
-@app.get("/")
-async def read_root():
-    return {"Hello": "World"}
+class BatchRequest(BaseModel):
+    domain: str
+    batch_size: int = 100  # valor por defecto
+    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 @app.on_event("startup")
 async def startup_event():
@@ -78,51 +66,28 @@ async def startup_event():
 async def shutdown_event():
     await app.state.client.aclose()
 
-@app.get("/error")
-async def error_handler():
-    return {"message": "There was an error with your request."}
 
-class URLData(BaseModel):
-    url: HttpUrl
-    title: str
-    h1: Optional[str] = None
-    main_keyword: Optional[str]
-    secondary_keywords: List[str] = []
-    semantic_search_intent: Optional[str]
-
-@app.post("/test")
-async def test_logging(data: List[URLData]):
-    logger.debug(f"Received data: {data}")
-    if not data:
-        logger.info("No data provided.")
-        return {"message": "No data provided."}
-    else:
-        logger.info("Processing data...")
-        return {"message": "Data processed."}
-
-class BatchRequest(BaseModel):
-    domain: str
-    batch_size: int = 100
-    start: int = 0
+########## ANALYZE_URL ############
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    logger.info(f"Fetching URLs from: {sitemap_url}")
+    print(f"Fetching URLs from: {sitemap_url}")
     urls = await fetch_sitemap(app.state.client, sitemap_url)
 
     if not urls:
-        logger.error("No URLs found in the sitemap.")
+        print("No URLs found in the sitemap.")
         raise HTTPException(status_code=404, detail="Sitemap not found or empty")
-
-    logger.info(f"Total URLs fetched for processing: {len(urls)}")
+    
+    print(f"Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
-    logger.info(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
+    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
     tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
     results = await asyncio.gather(*tasks)
-    logger.info(f"Results received: {results}")
+    print(f"Results received: {results}")
 
+    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
     valid_results = [
         {
             "url": result['url'],
@@ -133,11 +98,11 @@ async def process_urls_in_batches(request: BatchRequest):
             "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
         } for result in results if result
     ]
-    logger.info(f"Filtered results: {valid_results}")
+    print(f"Filtered results: {valid_results}")
 
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
-    logger.info(f"More batches: {more_batches}, Next batch start index: {next_start}")
+    print(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
         "processed_urls": valid_results,
@@ -169,11 +134,17 @@ async def fetch_sitemap(client, url):
         elif 'urlset' in sitemap_contents:
             all_urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
 
-        logger.info(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
+        print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
         return all_urls
     except Exception as e:
-        logger.error(f"Error fetching or parsing sitemap from {url}: {str(e)}")
-        return []
+        print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
+        return None
+
+############################################
+
+
+
+########## ANALYZE_INTERNAL_LINKS ##########
 
 @app.post("/analyze_internal_links", response_model=InternalLinkAnalysis)
 async def handle_analyze_internal_links(domain: str = Body(..., embed=True)):
@@ -182,51 +153,114 @@ async def handle_analyze_internal_links(domain: str = Body(..., embed=True)):
         result = await analyze_internal_links(corrected_domain, client)
         return result
 
+
+############################################
+
+
+
+
+########## ANALYZE_WPO ##########
+
+
 def check_server_availability(url):
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
         return True
     except requests.exceptions.RequestException as e:
-        logger.error(f"Server not available for {url}: {str(e)}")
+        print(f"Server not available for {url}: {str(e)}")
         return False
 
+# Llamada a la función
 if check_server_availability('https://example.com'):
-    logger.info("Server is available.")
+    print("Procede con la obtención del tamaño de los recursos")
 else:
-    logger.error("Server is not available.")
+    print("El servidor no está disponible. Intenta más tarde.")
 
 class WPORequest(BaseModel):
     url: str
 
 @app.post("/analyze_wpo")
 async def analyze_wpo_endpoint(request: WPORequest):
+    # Asegúrate de pasar la URL como argumento a la función analyze_wpo
     return await analyze_wpo(request.url)
 
-class CannibalizationURLData(BaseModel):
-    url: HttpUrl
-    title: str
+###############################################
 
+
+
+########### ANALIZE_CANNIBALIZATION ##########
+
+
+# Definición de modelos para el análisis de canibalización
 class CannibalizationRequest(BaseModel):
-    processed_urls: List[CannibalizationURLData]
+    processed_urls: List[URLData]
+    more_batches: Optional[bool] = False
+    next_batch_start: Optional[int] = None
 
-class CannibalizationResult(BaseModel):
-    url1: HttpUrl
-    url2: HttpUrl
-    cannibalization_level: str
+@app.post("/analyze_cannibalization")
+async def analyze_cannibalization_endpoint(domain: str):
+    # Crear un BatchRequest con el dominio y configuraciones de lote
+    request = BatchRequest(domain=domain, batch_size=100, start=0)
+    response = await process_urls_in_batches_for_cannibalization(request)
+    cannibalization_urls = response.get('processed_urls', [])  # Cambiando el nombre de la variable para claridad
+    
+    # Convertir URLData a CannibalizationURLData antes del análisis
+    cannibalization_data = convert_to_cannibalization_data(cannibalization_urls)
+    results = analyze_cannibalization(cannibalization_data)
+    if results.get("message"):
+        return {"message": results["message"]}
+    else:
+        return {"cannibalization_issues": results}
 
-@app.post("/analyze_cannibalization/", response_model=List[CannibalizationResult], status_code=status.HTTP_200_OK)
-async def analyze_cannibalization_endpoint(data: CannibalizationRequest):
-    logger.debug(f"Received data for cannibalization analysis: {data}")
-    try:
-        results = await analyze_cannibalization(data.processed_urls)
-        return results
-    except ValidationError as ve:
-        logger.error(f"Validation error: {ve.errors()}")
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=ve.errors())
-    except Exception as e:
-        logger.error(f"Unexpected error during cannibalization analysis: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+def convert_to_cannibalization_data(url_data_list: List[Dict]) -> List[CannibalizationURLData]:
+    """Converts a list of URLData dictionaries to CannibalizationURLData by extracting necessary fields."""
+    return [
+        CannibalizationURLData(
+            url=data['url'],
+            title=data['title'],
+            main_keyword=data['main_keyword'],
+            semantic_search_intent=data['semantic_search_intent']
+        ) for data in url_data_list
+    ]
+
+@app.post("/process_urls_in_batches_for_cannibalization")
+async def process_urls_in_batches_for_cannibalization(request: BatchRequest):
+    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
+    urls = await fetch_sitemap(app.state.client, sitemap_url)
+
+    if not urls:
+        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
+    
+    urls_to_process = urls[request.start:request.start + request.batch_size]
+    tasks = [analyze_url_for_cannibalization(url, app.state.client) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
+    
+    cannibalization_urls = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+        } for result in results if result
+    ]
+
+    next_start = request.start + len(urls_to_process)
+    more_batches = next_start < len(urls)
+
+    return {
+        "cannibalization_urls": cannibalization_urls,
+        "more_batches": more_batches,
+        "next_batch_start": next_start if more_batches else None
+    }
+
+
+
+
+##############################################
+
+
 
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=10000, log_level="debug")
