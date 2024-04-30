@@ -48,7 +48,6 @@ async def test_logging(data: List[URLData]):
         logger.info("Processing data...")
         return {"message": "Data processed."}
 
-
 class BatchRequest(BaseModel):
     domain: str
     batch_size: int = 100  # valor por defecto
@@ -192,40 +191,41 @@ async def analyze_wpo_endpoint(request: WPORequest):
 ########### ANALIZE_CANNIBALIZATION ##########
 
 
-# Definición de modelos para el análisis de canibalización
 class CannibalizationRequest(BaseModel):
-    processed_urls: List[URLData]
-    more_batches: Optional[bool] = False
+    processed_urls: List[CannibalizationURLData]
+    more_batches: bool = False
     next_batch_start: Optional[int] = None
 
-@app.post("/analyze_cannibalization")
-async def analyze_cannibalization_endpoint(domain: str):
-    # Crear un BatchRequest con el dominio y configuraciones de lote
-    request = BatchRequest(domain=domain, batch_size=100, start=0)
-    response = await process_urls_in_batches_for_cannibalization(request)
-    cannibalization_urls = response.get('processed_urls', [])  # Cambiando el nombre de la variable para claridad
-    
-    # Convertir URLData a CannibalizationURLData antes del análisis
-    cannibalization_data = convert_to_cannibalization_data(cannibalization_urls)
-    results = analyze_cannibalization(cannibalization_data)
-    if results.get("message"):
-        return {"message": results["message"]}
-    else:
-        return {"cannibalization_issues": results}
+class CannibalizationBatchRequest(BaseModel):
+    domain: str
+    batch_size: int = 100  # valor por defecto
+    start: int = 0  # valor por defecto para iniciar, asegura que siempre tenga un valor
 
-def convert_to_cannibalization_data(url_data_list: List[Dict]) -> List[CannibalizationURLData]:
-    """Converts a list of URLData dictionaries to CannibalizationURLData by extracting necessary fields."""
-    return [
-        CannibalizationURLData(
-            url=data['url'],
-            title=data['title'],
-            main_keyword=data['main_keyword'],
-            semantic_search_intent=data['semantic_search_intent']
-        ) for data in url_data_list
-    ]
+class CannibalizationURLData(BaseModel):
+    url: str
+    title: str
+    main_keyword: str
+    semantic_search_intent: str
+
+@app.post("/analyze_cannibalization", response_model=dict)
+async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
+    try:
+        # Llama a la función de análisis de canibalización con los datos procesados
+        result = analyze_cannibalization(request.processed_urls)
+        return {
+            "status": "Analysis completed",
+            "cannibalization_issues": result.get("cannibalization_issues", []),
+            "message": result.get("message", "No cannibalization detected"),
+            "total_urls_analyzed": len(request.processed_urls),
+            "more_batches": request.more_batches,
+            "next_batch_index": request.next_batch_start if request.more_batches else None
+        }
+    except Exception as e:
+        logger.error(f"Failed to analyze cannibalization: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @app.post("/process_urls_in_batches_for_cannibalization")
-async def process_urls_in_batches_for_cannibalization(request: BatchRequest):
+async def process_urls_in_batches_for_cannibalization(request: CannibalizationBatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
     urls = await fetch_sitemap(app.state.client, sitemap_url)
 
@@ -237,23 +237,35 @@ async def process_urls_in_batches_for_cannibalization(request: BatchRequest):
     results = await asyncio.gather(*tasks)
     
     cannibalization_urls = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        } for result in results if result
+        CannibalizationURLData(
+            url=result['url'],
+            title=result.get('title', "No title provided"),
+            main_keyword=result.get('main_keyword', "Not specified"),
+            semantic_search_intent=result.get('semantic_search_intent', "Not specified")
+        ) for result in results if result
     ]
 
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
 
-    return {
-        "cannibalization_urls": cannibalization_urls,
-        "more_batches": more_batches,
-        "next_batch_start": next_start if more_batches else None
-    }
+    return CannibalizationRequest(
+        processed_urls=cannibalization_urls,
+        more_batches=more_batches,
+        next_batch_start=next_start if more_batches else None
+    )
 
+
+
+def convert_to_cannibalization_data(url_data_list: List[Dict]) -> List[CannibalizationURLData]:
+    """Converts a list of URLData dictionaries to CannibalizationURLData by extracting necessary fields."""
+    return [
+        CannibalizationURLData(
+            url=data['url'],
+            title=data['title'],
+            main_keyword=data['main_keyword'],
+            semantic_search_intent=data['semantic_search_intent']
+        ) for data in url_data_list
+    ]
 
 
 
