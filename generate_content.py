@@ -9,10 +9,10 @@ import asyncio
 import logging
 
 # Configuración de la caché usando variables de entorno
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = int(os.getenv('REDIS_PORT', 6379))
-REDIS_URL = os.getenv('REDIS_URL', f'redis://{REDIS_HOST}:{REDIS_PORT}')
-cache = Cache(Cache.REDIS, endpoint=REDIS_HOST, port=REDIS_PORT, namespace="main")
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')  # Valor por defecto para desarrollo local
+
+# Crear configuración de la caché directamente desde la URL de Redis
+cache = Cache.from_url(REDIS_URL, namespace="main")
 
 # Cargar la clave de la API de OpenAI desde las variables de entorno
 api_key = os.getenv("OPENAI_API_KEY")
