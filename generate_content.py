@@ -11,7 +11,8 @@ import logging
 
 REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
 
-cache = Cache(RedisBackend.from_url(REDIS_URL, namespace="main"))
+# Asegúrate de que el backend de Redis está configurado correctamente.
+cache = Cache(RedisBackend, endpoint="redis_instance", port=6379, namespace="main", password="your_password")
 
 # Cargar la clave de la API de OpenAI desde las variables de entorno
 api_key = os.getenv("OPENAI_API_KEY")
