@@ -1,5 +1,6 @@
 # generate_content.py
 
+from bs4 import BeautifulSoup
 from pydantic import BaseModel, HttpUrl
 import httpx
 import json
@@ -155,19 +156,6 @@ def load_processed_data_from_file(file_path="progress.json"):
         print("Failed to decode JSON. File might be corrupted.")
         return {}
 
-async def process_new_data(url, client):
-    # Simulación de la obtención y procesamiento de datos
-    # Deberías implementar la lógica de extracción y procesamiento aquí
-    processed_data = {
-        "title": "Example Title",
-        "meta_description": "Example Meta Description",
-        "main_keyword": "Example Main Keyword",
-        "secondary_keywords": ["Keyword 1", "Keyword 2"],
-        "semantic_search_intent": "Buy"
-    }
-    await set_cached_data(url, processed_data)
-    return processed_data
-
 async def fetch_url_data(url, client, retries=3):
     attempt = 0
     while attempt < retries:
@@ -183,4 +171,38 @@ async def fetch_url_data(url, client, retries=3):
             logging.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
             break
     logging.error(f"Failed to fetch data from {url} after {retries} attempts.")
+    return None
+
+async def process_new_data(url, client):
+    logging.debug(f"Starting data processing for URL: {url}")
+    try:
+        response = await client.get(url)
+        response.raise_for_status()  # Asegura que la solicitud fue exitosa
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Extrae elementos utilizando BeautifulSoup
+        title = soup.find('title').text if soup.find('title') else 'Título no encontrado'
+        meta_description = soup.find('meta', attrs={'name': 'description'})
+        meta_description = meta_description['content'] if meta_description else 'Descripción no proporcionada'
+        keywords = soup.find('meta', attrs={'name': 'keywords'})
+        keywords = keywords['content'].split(',') if keywords else ['Palabras clave no especificadas']
+        semantic_search_intent = 'Informar'  # Esto debería derivarse de un análisis más complejo
+        
+        processed_data = {
+            "title": title.strip(),
+            "meta_description": meta_description.strip(),
+            "main_keyword": keywords[0].strip(),
+            "secondary_keywords": [keyword.strip() for keyword in keywords[1:]],
+            "semantic_search_intent": semantic_search_intent
+        }
+
+        # Guardar en caché
+        await set_cached_data(url, processed_data)
+        logging.info(f"Data processed and cached for URL: {url}")
+        return processed_data
+    except httpx.HTTPStatusError as e:
+        logging.error(f"HTTP error occurred while fetching data from {url}: {str(e)}")
+    except Exception as e:
+        logging.error(f"An error occurred while processing data for {url}: {str(e)}")
+
     return None
