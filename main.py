@@ -22,8 +22,6 @@ import requests
 import logging
 from aiocache import Cache
 
-cache = Cache(Cache.REDIS, endpoint="localhost", port=6379, namespace="main_cache")
-
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -31,25 +29,6 @@ logging.basicConfig(level=logging.DEBUG,
 logger = logging.getLogger("CannibalizationAnalysis")
 
 app = FastAPI(title="ErnieRank API")
-
-class URLData(BaseModel):
-    url: str
-    title: str
-    meta_description: str
-    main_keyword: str
-    secondary_keywords: List[str]
-    semantic_search_intent: str
-
-@app.post("/test")
-async def test_logging(data: List[URLData]):
-    logger.debug(f"Received data: {data}")
-    if not data:
-        logger.info("No data provided.")
-        return {"message": "No data provided."}
-    else:
-        # Simulate processing
-        logger.info("Processing data...")
-        return {"message": "Data processed."}
 
 class BatchRequest(BaseModel):
     domain: str
@@ -60,7 +39,6 @@ class BatchRequest(BaseModel):
 async def startup_event():
     app.state.client = httpx.AsyncClient()
     app.state.progress_file = "progress.json"
-    app.state.cache = Cache(Cache.REDIS, endpoint="localhost", port=6379, namespace="main_cache")
     if not os.path.exists(app.state.progress_file):
         with open(app.state.progress_file, 'w') as file:
             json.dump({"current_index": 0, "urls": []}, file)
@@ -68,7 +46,6 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.client.aclose()
-    await app.state.cache.close()
 
 
 ########## ANALYZE_URL ############
@@ -76,44 +53,36 @@ async def shutdown_event():
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    cache_key = f"{request.domain}_data"
+    print(f"Fetching URLs from: {sitemap_url}")
+    urls = await fetch_sitemap(app.state.client, sitemap_url)
+
+    if not urls:
+        print("No URLs found in the sitemap.")
+        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
     
-    # Verificar si ya existe en caché
-    cached_data = await app.state.cache.get(cache_key)
-    if cached_data:
-        print("Using cached data.")
-        valid_results = cached_data
-    else:
-        print(f"Fetching URLs from: {sitemap_url}")
-        urls = await fetch_sitemap(app.state.client, sitemap_url)
+    print(f"Total URLs fetched for processing: {len(urls)}")
+    urls_to_process = urls[request.start:request.start + request.batch_size]
+    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
-        if not urls:
-            print("No URLs found in the sitemap.")
-            raise HTTPException(status_code=404, detail="Sitemap not found or empty")
-        
-        print(f"Total URLs fetched for processing: {len(urls)}")
-        urls_to_process = urls[request.start:request.start + request.batch_size]
-        print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
+    tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
+    print(f"Results received: {results}")
 
-        tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
-        results = await asyncio.gather(*tasks)
-        print(f"Results received: {results}")
+    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
+    valid_results = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "meta_description": result.get('meta_description', "No description provided"),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "secondary_keywords": result.get('secondary_keywords', []),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+        } for result in results if result
+    ]
+    print(f"Filtered results: {valid_results}")
 
-        valid_results = [
-            {
-                "url": result['url'],
-                "title": result.get('title', "No title provided"),
-                "meta_description": result.get('meta_description', "No description provided"),
-                "main_keyword": result.get('main_keyword', "Not specified"),
-                "secondary_keywords": result.get('secondary_keywords', []),
-                "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-            } for result in results if result
-        ]
-        await app.state.cache.set(cache_key, valid_results, ttl=3600)  # Ajusta el ttl según la necesidad de frescura de los datos
-        print(f"Filtered results: {valid_results}")
-
-    next_start = request.start + len(valid_results)
-    more_batches = next_start < len(urls) if 'urls' in locals() else False
+    next_start = request.start + len(urls_to_process)
+    more_batches = next_start < len(urls)
     print(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
