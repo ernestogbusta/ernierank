@@ -3,14 +3,14 @@
 from pydantic import BaseModel, HttpUrl
 import httpx
 import json
-from aiocache import Cache
-from aiocache.backends.redis import RedisBackend
 import os
 import asyncio
 import logging
+from aiocache import Cache
+from aiocache.backends.redis import RedisBackend
 
-# Suponiendo que REDIS_URL es la URL completa de tu instancia Redis proporcionada por Render, incluyendo la contraseña si es necesaria
-REDIS_URL = "redis://:password@hostname:port"
+# Usando directamente la URL de Redis proporcionada
+REDIS_URL = "redis://red-co9d0e5jm4es73atc0ng:6379"
 
 cache = Cache.from_url(REDIS_URL)
 
