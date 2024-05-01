@@ -3,14 +3,14 @@
 from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
-from analyze_cannibalization import analyze_cannibalization, CannibalizationURLData, analyze_url_for_cannibalization
+from analyze_cannibalization import analyze_cannibalization
 from fastapi import FastAPI, HTTPException, Request, Body
 import httpx
 from bs4 import BeautifulSoup
 import xmltodict
 import os
 import json
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 import uvicorn
 from collections import Counter
 from typing import List, Dict, Optional
@@ -20,6 +20,9 @@ import asyncio
 import time
 import requests
 import logging
+from aiocache import Cache
+
+cache = Cache(Cache.REDIS, endpoint="localhost", port=6379, namespace="main_cache")
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -57,6 +60,7 @@ class BatchRequest(BaseModel):
 async def startup_event():
     app.state.client = httpx.AsyncClient()
     app.state.progress_file = "progress.json"
+    app.state.cache = Cache(Cache.REDIS, endpoint="localhost", port=6379, namespace="main_cache")
     if not os.path.exists(app.state.progress_file):
         with open(app.state.progress_file, 'w') as file:
             json.dump({"current_index": 0, "urls": []}, file)
@@ -64,6 +68,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.client.aclose()
+    await app.state.cache.close()
 
 
 ########## ANALYZE_URL ############
@@ -71,36 +76,44 @@ async def shutdown_event():
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    print(f"Fetching URLs from: {sitemap_url}")
-    urls = await fetch_sitemap(app.state.client, sitemap_url)
-
-    if not urls:
-        print("No URLs found in the sitemap.")
-        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
+    cache_key = f"{request.domain}_data"
     
-    print(f"Total URLs fetched for processing: {len(urls)}")
-    urls_to_process = urls[request.start:request.start + request.batch_size]
-    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
+    # Verificar si ya existe en caché
+    cached_data = await app.state.cache.get(cache_key)
+    if cached_data:
+        print("Using cached data.")
+        valid_results = cached_data
+    else:
+        print(f"Fetching URLs from: {sitemap_url}")
+        urls = await fetch_sitemap(app.state.client, sitemap_url)
 
-    tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-    print(f"Results received: {results}")
+        if not urls:
+            print("No URLs found in the sitemap.")
+            raise HTTPException(status_code=404, detail="Sitemap not found or empty")
+        
+        print(f"Total URLs fetched for processing: {len(urls)}")
+        urls_to_process = urls[request.start:request.start + request.batch_size]
+        print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
-    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
-    valid_results = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "meta_description": result.get('meta_description', "No description provided"),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        } for result in results if result
-    ]
-    print(f"Filtered results: {valid_results}")
+        tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
+        results = await asyncio.gather(*tasks)
+        print(f"Results received: {results}")
 
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
+        valid_results = [
+            {
+                "url": result['url'],
+                "title": result.get('title', "No title provided"),
+                "meta_description": result.get('meta_description', "No description provided"),
+                "main_keyword": result.get('main_keyword', "Not specified"),
+                "secondary_keywords": result.get('secondary_keywords', []),
+                "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+            } for result in results if result
+        ]
+        await app.state.cache.set(cache_key, valid_results, ttl=3600)  # Ajusta el ttl según la necesidad de frescura de los datos
+        print(f"Filtered results: {valid_results}")
+
+    next_start = request.start + len(valid_results)
+    more_batches = next_start < len(urls) if 'urls' in locals() else False
     print(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
@@ -191,82 +204,20 @@ async def analyze_wpo_endpoint(request: WPORequest):
 ########### ANALIZE_CANNIBALIZATION ##########
 
 
-class CannibalizationRequest(BaseModel):
-    processed_urls: List[CannibalizationURLData]
-    more_batches: bool = False
-    next_batch_start: Optional[int] = None
-
-class CannibalizationBatchRequest(BaseModel):
-    domain: str
-    batch_size: int = 100  # valor por defecto
-    start: int = 0  # valor por defecto para iniciar, asegura que siempre tenga un valor
-
-class CannibalizationURLData(BaseModel):
-    url: str
-    title: str
-    main_keyword: str
+class CannibalizationData(BaseModel):
+    url: HttpUrl
     semantic_search_intent: str
 
-@app.post("/analyze_cannibalization", response_model=dict)
-async def analyze_cannibalization_endpoint(request: CannibalizationRequest):
+class CannibalizationRequest(BaseModel):
+    processed_urls: List[CannibalizationData]
+
+@app.post("/analyze_cannibalization")
+async def endpoint_analyze_cannibalization(request: CannibalizationRequest):
     try:
-        # Llama a la función de análisis de canibalización con los datos procesados
-        result = analyze_cannibalization(request.processed_urls)
-        return {
-            "status": "Analysis completed",
-            "cannibalization_issues": result.get("cannibalization_issues", []),
-            "message": result.get("message", "No cannibalization detected"),
-            "total_urls_analyzed": len(request.processed_urls),
-            "more_batches": request.more_batches,
-            "next_batch_index": request.next_batch_start if request.more_batches else None
-        }
-    except Exception as e:
-        logger.error(f"Failed to analyze cannibalization: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-@app.post("/process_urls_in_batches_for_cannibalization")
-async def process_urls_in_batches_for_cannibalization(request: CannibalizationBatchRequest):
-    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    urls = await fetch_sitemap(app.state.client, sitemap_url)
-
-    if not urls:
-        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
-    
-    urls_to_process = urls[request.start:request.start + request.batch_size]
-    tasks = [analyze_url_for_cannibalization(url, app.state.client) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-    
-    cannibalization_urls = [
-        CannibalizationURLData(
-            url=result['url'],
-            title=result.get('title', "No title provided"),
-            main_keyword=result.get('main_keyword', "Not specified"),
-            semantic_search_intent=result.get('semantic_search_intent', "Not specified")
-        ) for result in results if result
-    ]
-
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
-
-    return CannibalizationRequest(
-        processed_urls=cannibalization_urls,
-        more_batches=more_batches,
-        next_batch_start=next_start if more_batches else None
-    )
-
-
-
-def convert_to_cannibalization_data(url_data_list: List[Dict]) -> List[CannibalizationURLData]:
-    """Converts a list of URLData dictionaries to CannibalizationURLData by extracting necessary fields."""
-    return [
-        CannibalizationURLData(
-            url=data['url'],
-            title=data['title'],
-            main_keyword=data['main_keyword'],
-            semantic_search_intent=data['semantic_search_intent']
-        ) for data in url_data_list
-    ]
-
+        results = await analyze_cannibalization(request.processed_urls)
+        return {"message": "Análisis de canibalización completado correctamente", "cannibalization_issues": results}
+    except HTTPException as e:
+        return {"message": e.detail}
 
 
 ##############################################
