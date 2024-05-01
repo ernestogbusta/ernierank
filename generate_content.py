@@ -9,10 +9,10 @@ import os
 import asyncio
 import logging
 
-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
+# Suponiendo que REDIS_URL es la URL completa de tu instancia Redis proporcionada por Render, incluyendo la contraseña si es necesaria
+REDIS_URL = "redis://:password@hostname:port"
 
-# Asegúrate de que el backend de Redis está configurado correctamente.
-cache = Cache(RedisBackend, endpoint="redis_instance", port=6379, namespace="main", password="your_password")
+cache = Cache.from_url(REDIS_URL)
 
 # Cargar la clave de la API de OpenAI desde las variables de entorno
 api_key = os.getenv("OPENAI_API_KEY")
