@@ -4,15 +4,14 @@ from pydantic import BaseModel, HttpUrl
 import httpx
 import json
 from aiocache import Cache
+from aiocache.backends.redis import RedisBackend
 import os
 import asyncio
 import logging
 
-# Configuración de la caché usando variables de entorno
-REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')  # Valor por defecto para desarrollo local
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
 
-# Crear configuración de la caché directamente desde la URL de Redis
-cache = Cache.from_url(REDIS_URL, namespace="main")
+cache = Cache(RedisBackend.from_url(REDIS_URL, namespace="main"))
 
 # Cargar la clave de la API de OpenAI desde las variables de entorno
 api_key = os.getenv("OPENAI_API_KEY")
