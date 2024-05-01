@@ -4,6 +4,7 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
+from generate_content import get_cached_data, set_cached_data, generate_content_based_on_seo_data, call_openai_gpt4, generate_seo_content, load_processed_data_from_file, process_new_data
 from fastapi import FastAPI, HTTPException, Request, Body
 import httpx
 from bs4 import BeautifulSoup
@@ -41,7 +42,8 @@ async def startup_event():
     app.state.progress_file = "progress.json"
     if not os.path.exists(app.state.progress_file):
         with open(app.state.progress_file, 'w') as file:
-            json.dump({"current_index": 0, "urls": []}, file)
+            json.dump({"urls": []}, file)  # Asegura una estructura mínima adecuada
+    logging.info("Startup configuration completed.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -187,6 +189,44 @@ async def endpoint_analyze_cannibalization(request: CannibalizationRequest):
         return {"message": "Análisis de canibalización completado correctamente", "cannibalization_issues": results}
     except HTTPException as e:
         return {"message": e.detail}
+
+
+##############################################
+
+
+
+########### GENERATE_CONTENT ##########
+
+PROGRESS_FILE = "path_to_your_progress_file.json"
+
+class ContentRequest(BaseModel):
+    url: HttpUrl
+
+@app.post("/generate_content")
+async def generate_content_endpoint(request: ContentRequest):
+    logging.debug(f"Request received for generating content for URL: {request.url}")
+    try:
+        cached_data = await get_cached_data(request.url)
+        if cached_data:
+            logging.debug("Using cached data for content generation.")
+            if isinstance(cached_data, dict):
+                content_generated = generate_seo_content(cached_data)
+                return {"generated_content": content_generated}
+            else:
+                logging.error("Cached data is not in dictionary format.")
+                raise TypeError("Cached data must be a dictionary")
+        else:
+            logging.debug("No cached data found, processing new data.")
+            new_data = await process_new_data(request.url, app.state.client)
+            if new_data:
+                await set_cached_data(request.url, new_data)
+                content_generated = generate_seo_content(new_data)
+                return {"generated_content": content_generated}
+            else:
+                raise HTTPException(status_code=500, detail="Failed to process new data")
+    except Exception as e:
+        logging.error(f"An error occurred while generating content: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
 ##############################################
