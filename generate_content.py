@@ -10,9 +10,8 @@ import logging
 from aiocache import Cache
 from aiocache.backends.redis import RedisBackend
 
-# Usando directamente la URL de Redis proporcionada
-REDIS_URL = "redis://red-co9d0e5jm4es73atc0ng:6379"
-
+# URL externa de Redis con soporte para TLS y autenticación incluida
+REDIS_URL = "rediss://red-co9d0e5jm4es73atc0ng:FuTgObFfNdlhcUdSthCpcXImJIqHtzuq@oregon-redis.render.com:6379"
 cache = Cache.from_url(REDIS_URL)
 
 # Cargar la clave de la API de OpenAI desde las variables de entorno
@@ -24,18 +23,16 @@ headers = {
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 async def set_cached_data(url, data, ttl=604800):
+    # Convierte los datos a string JSON para almacenar en Redis
     if isinstance(data, dict):
-        data = json.dumps(data)  # Convierte el diccionario a JSON string
+        data = json.dumps(data)
     await cache.set(url, data, ttl)
 
 async def get_cached_data(url):
+    # Recupera los datos de Redis y los convierte de JSON a diccionario
     data = await cache.get(url)
     if data:
-        try:
-            return json.loads(data)  # Convierte JSON string a diccionario
-        except json.JSONDecodeError:
-            logging.error("Failed to decode cached JSON data.")
-            return None
+        return json.loads(data)
     return None
 
 class ContentRequest(BaseModel):
@@ -137,25 +134,6 @@ def ensure_minimum_content(data):
         word_count = len(data.split())
     return data
 
-def save_processed_data_to_file(data, file_path="progress.json"):
-    try:
-        with open(file_path, 'w') as f:
-            json.dump(data, f, indent=4)
-        logging.info("Data saved to file successfully.")
-    except Exception as e:
-        logging.error(f"Failed to save data to file: {str(e)}")
-
-def load_processed_data_from_file(file_path="progress.json"):
-    try:
-        with open(file_path, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        print("No previous data found. Starting fresh.")
-        return {}
-    except json.JSONDecodeError:
-        print("Failed to decode JSON. File might be corrupted.")
-        return {}
-
 async def fetch_url_data(url, client, retries=3):
     attempt = 0
     while attempt < retries:
@@ -177,7 +155,7 @@ async def process_new_data(url, client):
     logging.debug(f"Starting data processing for URL: {url}")
     try:
         response = await client.get(url)
-        response.raise_for_status()  # Asegura que la solicitud fue exitosa
+        response.raise_for_status()  # Verifica que la solicitud fue exitosa
         soup = BeautifulSoup(response.text, 'html.parser')
         
         # Extrae elementos utilizando BeautifulSoup
@@ -186,17 +164,16 @@ async def process_new_data(url, client):
         meta_description = meta_description['content'] if meta_description else 'Descripción no proporcionada'
         keywords = soup.find('meta', attrs={'name': 'keywords'})
         keywords = keywords['content'].split(',') if keywords else ['Palabras clave no especificadas']
-        semantic_search_intent = 'Informar'  # Esto debería derivarse de un análisis más complejo
         
         processed_data = {
             "title": title.strip(),
             "meta_description": meta_description.strip(),
             "main_keyword": keywords[0].strip(),
             "secondary_keywords": [keyword.strip() for keyword in keywords[1:]],
-            "semantic_search_intent": semantic_search_intent
+            "semantic_search_intent": 'Informar'  # Asignar según lógica de negocio
         }
 
-        # Guardar en caché
+        # Guardar en caché los datos procesados
         await set_cached_data(url, processed_data)
         logging.info(f"Data processed and cached for URL: {url}")
         return processed_data
@@ -204,5 +181,13 @@ async def process_new_data(url, client):
         logging.error(f"HTTP error occurred while fetching data from {url}: {str(e)}")
     except Exception as e:
         logging.error(f"An error occurred while processing data for {url}: {str(e)}")
-
     return None
+
+async def save_progress_to_redis(progress_data):
+    await app.state.redis.set('progress', json.dumps(progress_data))
+
+async def load_progress_from_redis():
+    progress_data = await app.state.redis.get('progress')
+    if progress_data:
+        return json.loads(progress_data)
+    return {"urls": []}  # estructura mínima si no hay datos

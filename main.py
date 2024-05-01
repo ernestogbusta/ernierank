@@ -38,16 +38,32 @@ class BatchRequest(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
+    # Configura el logger
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Configura el cliente HTTP para operaciones asincrónicas
     app.state.client = httpx.AsyncClient()
-    app.state.progress_file = "progress.json"
-    if not os.path.exists(app.state.progress_file):
-        with open(app.state.progress_file, 'w') as file:
-            json.dump({"urls": []}, file)  # Asegura una estructura mínima adecuada
+
+    # Configura la conexión a Redis con soporte para TLS y autenticación
+    redis_url = "rediss://red-co9d0e5jm4es73atc0ng:FuTgObFfNdlhcUdSthCpcXImJIqHtzuq@oregon-redis.render.com:6379"
+    app.state.cache = Cache.from_url(redis_url)
+
+    # Verificando la conexión con Redis...
+    try:
+        # Prueba estableciendo una clave
+        await app.state.cache.set('test_key', 'test_value')
+        # Prueba obteniendo la clave
+        value = await app.state.cache.get('test_key')
+        logging.info(f"Valor recuperado de Redis: {value}")
+    except Exception as e:
+        logging.error(f"Error al conectar con Redis: {e}")
+
     logging.info("Startup configuration completed.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.client.aclose()
+    await app.state.cache.close()
 
 
 ########## ANALYZE_URL ############
@@ -197,7 +213,6 @@ async def endpoint_analyze_cannibalization(request: CannibalizationRequest):
 
 ########### GENERATE_CONTENT ##########
 
-PROGRESS_FILE = "path_to_your_progress_file.json"
 
 class ContentRequest(BaseModel):
     url: HttpUrl
@@ -231,6 +246,16 @@ async def generate_content_endpoint(request: ContentRequest):
 
 ##############################################
 
+
+async def test_redis_connection():
+    try:
+        # Prueba estableciendo una clave
+        await cache.set('test_key', 'test_value')
+        # Prueba obteniendo la clave
+        value = await cache.get('test_key')
+        print(f"Valor recuperado de Redis: {value}")
+    except Exception as e:
+        print(f"Error al conectar con Redis: {e}")
 
 
 if __name__ == "__main__":
