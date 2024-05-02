@@ -22,18 +22,7 @@ import time
 import requests
 import logging
 
-
-# Configuración del logger
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S')
-logger = logging.getLogger("CannibalizationAnalysis")
-
 app = FastAPI(title="ErnieRank API")
-
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
 
 @app.on_event("startup")
 async def startup_event():
@@ -44,6 +33,15 @@ async def startup_event():
 async def shutdown_event():
     await app.state.client.aclose()
 
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
+
+# Configuración del logger
+logging.basicConfig(level=logging.DEBUG,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+                    datefmt='%Y-%m-%d %H:%M:%S')
+logger = logging.getLogger("CannibalizationAnalysis")
 
 ########## ANALYZE_URL ############
 
