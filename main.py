@@ -202,18 +202,38 @@ class ContentRequest(BaseModel):
     url: HttpUrl
 
 @app.post("/generate_content")
-async def generate_content_endpoint(request: ContentRequest):
-    logging.debug(f"Request received for generating content for URL: {request.url}")
+async def generate_content_endpoint(request: Request):
+    logging.debug(f"Request received: {await request.json()}")
+    req_data = await request.json()
+    url = req_data.get("url")
+
+    if not url:
+        logging.error("URL not provided in the request")
+        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE_ENTITY, detail="URL parameter is required.")
+
     try:
-        new_data = await process_new_data(request.url, app.state.client)
-        if new_data:
-            # Pasa app.state.client como segundo argumento a generate_seo_content
-            content_generated = await generate_seo_content(new_data, app.state.client)
-            return {"generated_content": content_generated}
-        else:
+        # Simulated function to process data from the URL
+        new_data = await process_new_data(url, app.state.client)
+        if not new_data:
+            logging.error(f"No data could be processed from the URL: {url}")
             raise HTTPException(status_code=500, detail="Failed to process new data")
+
+        # Here you need to adjust according to your application's specifics
+        # Assuming generate_seo_content returns the final content
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                'https://api.openai.com/v1/engines/davinci/completions',
+                json={"prompt": new_data, "max_tokens": 500},
+                headers={"Authorization": f"Bearer {app.state.openai_api_key}"}
+            )
+            content_generated = response.json()
+
+        return {"generated_content": content_generated}
+    except httpx.RequestError as exc:
+        logging.error(f"An error occurred while making HTTP call to OpenAI: {str(exc)}")
+        raise HTTPException(status_code=500, detail=f"HTTP request failed: {str(exc)}")
     except Exception as e:
-        logging.error(f"An error occurred while generating content: {str(e)}")
+        logging.error(f"An unexpected error occurred: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
