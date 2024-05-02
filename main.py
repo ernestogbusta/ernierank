@@ -4,7 +4,7 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
-from generate_content import get_cached_data, set_cached_data, generate_content_based_on_seo_data, call_openai_gpt4, generate_seo_content, load_processed_data_from_file, process_new_data
+from generate_content import generate_seo_content, process_new_data
 from fastapi import FastAPI, HTTPException, Request, Body
 import httpx
 from bs4 import BeautifulSoup
@@ -21,7 +21,7 @@ import asyncio
 import time
 import requests
 import logging
-from aiocache import Cache
+
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -31,42 +31,26 @@ logger = logging.getLogger("CannibalizationAnalysis")
 
 app = FastAPI(title="ErnieRank API")
 
-class BatchRequest(BaseModel):
-    domain: str
-    batch_size: int = 100  # valor por defecto
-    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
 
 @app.on_event("startup")
 async def startup_event():
-    # Configura el logger
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-    # Configura el cliente HTTP para operaciones asincrónicas
+    logging.basicConfig(level=logging.INFO)
     app.state.client = httpx.AsyncClient()
-
-    # Configura la conexión a Redis con soporte para TLS y autenticación
-    redis_url = "rediss://red-co9d0e5jm4es73atc0ng:FuTgObFfNdlhcUdSthCpcXImJIqHtzuq@oregon-redis.render.com:6379"
-    app.state.cache = Cache.from_url(redis_url)
-
-    # Verificando la conexión con Redis...
-    try:
-        # Prueba estableciendo una clave
-        await app.state.cache.set('test_key', 'test_value')
-        # Prueba obteniendo la clave
-        value = await app.state.cache.get('test_key')
-        logging.info(f"Valor recuperado de Redis: {value}")
-    except Exception as e:
-        logging.error(f"Error al conectar con Redis: {e}")
-
-    logging.info("Startup configuration completed.")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.client.aclose()
-    await app.state.cache.close()
 
 
 ########## ANALYZE_URL ############
+
+class BatchRequest(BaseModel):
+    domain: str
+    batch_size: int = 100  # valor por defecto
+    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
@@ -221,24 +205,13 @@ class ContentRequest(BaseModel):
 async def generate_content_endpoint(request: ContentRequest):
     logging.debug(f"Request received for generating content for URL: {request.url}")
     try:
-        cached_data = await get_cached_data(request.url)
-        if cached_data:
-            logging.debug("Using cached data for content generation.")
-            if isinstance(cached_data, dict):
-                content_generated = generate_seo_content(cached_data)
-                return {"generated_content": content_generated}
-            else:
-                logging.error("Cached data is not in dictionary format.")
-                raise TypeError("Cached data must be a dictionary")
+        new_data = await process_new_data(request.url, app.state.client)
+        if new_data:
+            # Pasa app.state.client como segundo argumento a generate_seo_content
+            content_generated = await generate_seo_content(new_data, app.state.client)
+            return {"generated_content": content_generated}
         else:
-            logging.debug("No cached data found, processing new data.")
-            new_data = await process_new_data(request.url, app.state.client)
-            if new_data:
-                await set_cached_data(request.url, new_data)
-                content_generated = generate_seo_content(new_data)
-                return {"generated_content": content_generated}
-            else:
-                raise HTTPException(status_code=500, detail="Failed to process new data")
+            raise HTTPException(status_code=500, detail="Failed to process new data")
     except Exception as e:
         logging.error(f"An error occurred while generating content: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
@@ -246,16 +219,6 @@ async def generate_content_endpoint(request: ContentRequest):
 
 ##############################################
 
-
-async def test_redis_connection():
-    try:
-        # Prueba estableciendo una clave
-        await cache.set('test_key', 'test_value')
-        # Prueba obteniendo la clave
-        value = await cache.get('test_key')
-        print(f"Valor recuperado de Redis: {value}")
-    except Exception as e:
-        print(f"Error al conectar con Redis: {e}")
 
 
 if __name__ == "__main__":

@@ -1,9 +1,11 @@
+#call_openai.py
+
 import asyncio
 import os
 from generate_content import call_openai_gpt4
 
 async def test_call_openai_gpt4():
-    prompt = "Dime cómo integrar un script de python con un GPT de OpenAI"
+    prompt = "Dame un contenido mejor optimizado para SEO"
     response = await call_openai_gpt4(prompt)
     print(response)
 

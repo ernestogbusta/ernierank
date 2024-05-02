@@ -3,66 +3,145 @@
 from bs4 import BeautifulSoup
 from pydantic import BaseModel, HttpUrl
 import httpx
+from httpx import HTTPStatusError, RequestError
 import json
 import os
 import asyncio
 import logging
-from aiocache import Cache
-from aiocache.backends.redis import RedisBackend
-
-# URL externa de Redis con soporte para TLS y autenticación incluida
-REDIS_URL = "rediss://red-co9d0e5jm4es73atc0ng:FuTgObFfNdlhcUdSthCpcXImJIqHtzuq@oregon-redis.render.com:6379"
-cache = Cache.from_url(REDIS_URL)
-
-# Cargar la clave de la API de OpenAI desde las variables de entorno
-api_key = os.getenv("OPENAI_API_KEY")
-headers = {
-    "Authorization": f"Bearer {api_key}"
-}
+from urllib.parse import urlparse
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-async def set_cached_data(url, data, ttl=604800):
-    # Convierte los datos a string JSON para almacenar en Redis
-    if isinstance(data, dict):
-        data = json.dumps(data)
-    await cache.set(url, data, ttl)
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise ValueError("OPENAI_API_KEY environment variable not set")
 
-async def get_cached_data(url):
-    # Recupera los datos de Redis y los convierte de JSON a diccionario
-    data = await cache.get(url)
-    if data:
-        return json.loads(data)
-    return None
+headers = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Authorization": f"Bearer {api_key}"
+}
 
 class ContentRequest(BaseModel):
     url: HttpUrl
 
-async def call_openai_gpt4(prompt):
+async def process_new_data(url, client):
+    retries = 3
+    attempt = 0
+    while attempt < retries:
+        try:
+            response = await client.get(url, headers=headers, timeout=120.0)
+            response.raise_for_status()
+            logging.debug(f"HTTP Response Status: {response.status_code}, URL: {url}")
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+            title = soup.find('title').text.strip() if soup.find('title') else 'Título no encontrado'
+            meta_description = soup.find('meta', attrs={'name': 'description'})
+            meta_description = meta_description['content'].strip() if meta_description else 'Descripción no proporcionada'
+            h1 = soup.find('h1').text.strip() if soup.find('h1') else 'H1 no encontrado'
+
+            keywords_meta = soup.find('meta', attrs={'name': 'keywords'})
+            if keywords_meta and keywords_meta['content']:
+                keywords = [kw.strip() for kw in keywords_meta['content'].split(',')]
+            else:
+                keywords = [title.split()[0]] if title != 'Título no encontrado' else ['Palabra clave relevante']
+
+            main_keyword = keywords[0]
+            secondary_keywords = keywords[1:]
+            semantic_search_intent = 'Informar' if 'informar' in meta_description.lower() else 'Vender'
+
+            processed_data = {
+                "title": title,
+                "meta_description": meta_description,
+                "h1": h1,
+                "main_keyword": main_keyword,
+                "secondary_keywords": secondary_keywords,
+                "semantic_search_intent": semantic_search_intent,
+                "url": url
+            }
+
+            logging.info(f"Data processed for URL: {url}")
+            return processed_data
+        except httpx.HTTPStatusError as e:
+            attempt += 1
+            logging.error(f"Attempt {attempt}: HTTP error occurred while fetching data from {url}: {str(e)}")
+            await asyncio.sleep(2 ** attempt)
+        except Exception as e:
+            logging.error(f"Unexpected error occurred while processing data for {url}: {str(e)}")
+            return None
+    return None
+
+async def generate_seo_content(processed_data, client):
+    title = processed_data.get('title', 'Título no encontrado')
+    semantic_intent = processed_data.get('semantic_search_intent', 'Intención no especificada')
+    main_keyword = processed_data.get('main_keyword', 'Palabra clave principal no especificada')
+    secondary_keywords = processed_data.get('secondary_keywords', [])
+
+    # Configuración para generar descripciones más detalladas
+    max_tokens_title = 100
+    max_tokens_meta = 200
+    max_tokens_h1 = 150
+    max_tokens_h2 = 800
+
+    # Generar título SEO
+    title_prompt = (
+        f"Genera un título SEO de hasta 100 caracteres centrado en {title if title != 'Título no encontrado' else main_keyword}, "
+        f"que sea atractivo pero no sensacionalista ni use expresiones exageradas como vender más y cosas así ni tampoco verbos en imperativo de estilo publicitario y que sea pertinente para la intención de búsqueda '{semantic_intent}'."
+    )
+    seo_title = f"<title>{await call_openai_gpt4(title_prompt, client, max_tokens_title)}</title>"
+
+    # Generar meta descripción
+    meta_description_prompt = (
+        f"Genera una meta descripción de hasta 200 caracteres que resuma el contenido del sitio usando '{main_keyword}' y "
+        f"refleje la intención '{semantic_intent}' basada en '{title}'."
+    )
+    seo_meta_description = f"<meta name='description' content='{await call_openai_gpt4(meta_description_prompt, client, max_tokens_meta)}'>"
+
+    # Generar H1
+    h1_prompt = (
+        f"Genera un H1 que sea directamente relevante para el contenido y que utilice '{main_keyword}' como enfoque principal."
+    )
+    seo_h1 = f"<h1>{await call_openai_gpt4(h1_prompt, client, max_tokens_h1)}</h1>"
+
+    full_content = f"{seo_title}\n{seo_meta_description}\n{seo_h1}\n"
+
+    # Generar contenido para al menos cinco H2 con verificación de longitud
+    required_paragraphs = 3
+    min_words_per_paragraph = 200
+    for i, keyword in enumerate([main_keyword] + secondary_keywords[:4]):  # Asegura al menos cinco H2 si es posible
+        for _ in range(required_paragraphs):
+            h2_prompt = (
+                f"Genera un párrafo detallado sobre '{keyword}', asegurando un mínimo de {min_words_per_paragraph} palabras."
+            )
+            paragraph_content = await call_openai_gpt4(h2_prompt, client, max_tokens_h2)
+            # Verificar si el párrafo cumple con el mínimo de palabras
+            while len(paragraph_content.split()) < min_words_per_paragraph:
+                additional_content = await call_openai_gpt4(h2_prompt, client, max_tokens_h2)
+                paragraph_content += " " + additional_content
+            full_content += f"<h2>{keyword}</h2>\n<p>{paragraph_content}</p>\n"
+
+    return full_content
+
+
+async def call_openai_gpt4(prompt, client, max_tokens):
     url = "https://api.openai.com/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
     payload = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 1500,
+        "max_tokens": max_tokens,
         "temperature": 0.7
     }
-    attempts = 0
-    while attempts < 3:
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                return response.json()["choices"][0]["message"]["content"]
-        except (httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            attempts += 1
-            logging.warning(f"Timeout occurred: {str(e)} - Attempt {attempts}")
-            await asyncio.sleep(2 ** attempts)  # Exponential backoff
-        except httpx.HTTPStatusError as e:
-            logging.error(f"HTTP error: {e.response.status_code} - {e.response.text}")
-            raise
-        except Exception as e:
-            logging.error(f"An unexpected error occurred: {str(e)}")
-            raise
+    response = await client.post(url, json=payload, headers=headers, timeout=30)
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
 
 async def fetch_processed_data(url: str, client: httpx.AsyncClient, progress_file: str):
     logging.debug(f"Fetching processed data for URL: {url} from {progress_file}")
@@ -82,63 +161,11 @@ async def fetch_processed_data(url: str, client: httpx.AsyncClient, progress_fil
         return {}
     return {}
 
-async def generate_content_based_on_seo_data(url, client):
-    data = await get_cached_data(url)
-    if not data:
-        data = await process_new_data(url, client)
-    if not data:
-        logging.error(f"No data available to generate content for {url}")
-        return "No content available"
-    # Generate content based on the processed data
-    return f"Generated Content: {data['title']} - {data['meta_description']}"
-
-    
-    return generate_seo_content(processed_data)
-
-def generate_seo_content(processed_data):
-    if not isinstance(processed_data, dict):
-        logging.error("Invalid data type for processed_data. Expected a dictionary.")
-        raise TypeError("Processed data must be a dictionary")
-    
-    title = processed_data.get('title', 'Título no proporcionado')
-    meta_description = processed_data.get('meta_description', 'Descripción no proporcionada')
-    main_keyword = processed_data.get('main_keyword', 'Palabra clave principal no especificada')
-    secondary_keywords = processed_data.get('secondary_keywords', [])
-    semantic_search_intent = processed_data.get('semantic_search_intent', 'Intención de búsqueda semántica no especificada')
-
-    # Construcción del contenido HTML o de texto
-    content = f"<h1>{title}</h1>\n"
-    content += f"<p><strong>Descripción:</strong> {meta_description}</p>\n"
-    content += f"<p><strong>Palabra clave principal:</strong> {main_keyword}</p>\n"
-    content += f"<p><strong>Intención de búsqueda semántica:</strong> {semantic_search_intent}</p>\n"
-
-    if secondary_keywords:
-        content += "<h2>Palabras clave secundarias</h2>\n<ul>\n"
-        for keyword in secondary_keywords:
-            content += f"<li>{keyword}</li>\n"
-        content += "</ul>\n"
-
-    content += "<h2>Análisis Detallado</h2>\n"
-    content += "<p>Este análisis ayuda a comprender cómo se puede optimizar el contenido para satisfacer las necesidades de búsqueda de los usuarios.</p>\n"
-    
-    logging.debug(f"Generated content for URL with processed data: {processed_data}")
-    return content
-
-
-MIN_WORDS = 1000  # Establece tu mínimo deseado
-
-def ensure_minimum_content(data):
-    word_count = len(data.split())
-    while word_count < MIN_WORDS:
-        data += " " + generate_additional_content()  # Asumiendo que tienes una función que genera más contenido
-        word_count = len(data.split())
-    return data
-
 async def fetch_url_data(url, client, retries=3):
     attempt = 0
     while attempt < retries:
         try:
-            response = await client.get(url, timeout=10.0)
+            response = await client.get(url, timeout=120.0)
             response.raise_for_status()
             return response.text
         except httpx.RequestError as e:
@@ -150,44 +177,3 @@ async def fetch_url_data(url, client, retries=3):
             break
     logging.error(f"Failed to fetch data from {url} after {retries} attempts.")
     return None
-
-async def process_new_data(url, client):
-    logging.debug(f"Starting data processing for URL: {url}")
-    try:
-        response = await client.get(url)
-        response.raise_for_status()  # Verifica que la solicitud fue exitosa
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Extrae elementos utilizando BeautifulSoup
-        title = soup.find('title').text if soup.find('title') else 'Título no encontrado'
-        meta_description = soup.find('meta', attrs={'name': 'description'})
-        meta_description = meta_description['content'] if meta_description else 'Descripción no proporcionada'
-        keywords = soup.find('meta', attrs={'name': 'keywords'})
-        keywords = keywords['content'].split(',') if keywords else ['Palabras clave no especificadas']
-        
-        processed_data = {
-            "title": title.strip(),
-            "meta_description": meta_description.strip(),
-            "main_keyword": keywords[0].strip(),
-            "secondary_keywords": [keyword.strip() for keyword in keywords[1:]],
-            "semantic_search_intent": 'Informar'  # Asignar según lógica de negocio
-        }
-
-        # Guardar en caché los datos procesados
-        await set_cached_data(url, processed_data)
-        logging.info(f"Data processed and cached for URL: {url}")
-        return processed_data
-    except httpx.HTTPStatusError as e:
-        logging.error(f"HTTP error occurred while fetching data from {url}: {str(e)}")
-    except Exception as e:
-        logging.error(f"An error occurred while processing data for {url}: {str(e)}")
-    return None
-
-async def save_progress_to_redis(progress_data):
-    await app.state.redis.set('progress', json.dumps(progress_data))
-
-async def load_progress_from_redis():
-    progress_data = await app.state.redis.get('progress')
-    if progress_data:
-        return json.loads(progress_data)
-    return {"urls": []}  # estructura mínima si no hay datos
