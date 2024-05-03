@@ -212,24 +212,27 @@ async def generate_content_endpoint(request: Request):
 
     if not url:
         logging.error("URL not provided in the request")
-        raise HTTPException(status_code=HTTP_422_UNPROCESSABLE_ENTITY, detail="URL parameter is required.")
+        raise HTTPException(status_code=422, detail="URL parameter is required.")
 
     try:
-        # Simulated function to process data from the URL
         new_data = await process_new_data(url, app.state.client)
         if not new_data:
             logging.error(f"No data could be processed from the URL: {url}")
             raise HTTPException(status_code=500, detail="Failed to process new data")
 
-        # Here you need to adjust according to your application's specifics
-        # Assuming generate_seo_content returns the final content
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
-                'https://api.openai.com/v1/engines/davinci/completions',
-                json={"prompt": new_data, "max_tokens": 500},
-                headers={"Authorization": f"Bearer {app.state.openai_api_key}"}
+                'https://api.openai.com/v1/completions',
+                headers={"Authorization": f"Bearer {app.state.openai_api_key}"},
+                json={
+                    "model": "gpt-4-turbo",
+                    "prompt": new_data,
+                    "max_tokens": 500,
+                    "temperature": 0.5
+                }
             )
-            content_generated = response.json()
+            response.raise_for_status()
+            content_generated = response.json()["choices"][0]["text"]
 
         return {"generated_content": content_generated}
     except httpx.RequestError as exc:

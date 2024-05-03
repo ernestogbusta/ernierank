@@ -133,7 +133,7 @@ async def call_openai_gpt4(prompt, client, max_tokens):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "gpt-4",
+        "model": "gpt-4-turbo",
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": 0.7
