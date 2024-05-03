@@ -30,9 +30,12 @@ async def startup_event():
     app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
     if not app.state.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
+    # Inicializar el cliente HTTP y asignarlo al estado de la aplicación
+    app.state.client = httpx.AsyncClient()
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    # Asegurar cerrar correctamente el cliente HTTP
     await app.state.client.aclose()
 
 @app.get("/")
