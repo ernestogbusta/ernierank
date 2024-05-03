@@ -30,12 +30,10 @@ async def startup_event():
     app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
     if not app.state.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
-    # Inicializar el cliente HTTP y asignarlo al estado de la aplicación
     app.state.client = httpx.AsyncClient()
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    # Asegurar cerrar correctamente el cliente HTTP
     await app.state.client.aclose()
 
 @app.get("/")
@@ -215,19 +213,16 @@ async def generate_content_endpoint(request: Request):
         raise HTTPException(status_code=422, detail="URL parameter is required.")
 
     try:
-        # Procesa los datos desde la URL
         new_data = await process_new_data(url, app.state.client)
         if not new_data:
             logging.error(f"No data could be processed from the URL: {url}")
             raise HTTPException(status_code=500, detail="Failed to process new data")
 
-        api_key = os.getenv("OPENAI_API_KEY")
         headers = {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {app.state.openai_api_key}",
             "Content-Type": "application/json"
         }
 
-        # Asegúrate de enviar los mensajes correctamente.
         payload = {
             "model": "gpt-4-turbo",
             "messages": [
@@ -238,16 +233,16 @@ async def generate_content_endpoint(request: Request):
             "temperature": 0.5
         }
 
-        # Aumento del timeout en la configuración del cliente HTTP
-        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=120.0)) as client:
-            response = await client.post(
-                'https://api.openai.com/v1/chat/completions',
-                headers=headers,
-                json=payload
-            )
-            response.raise_for_status()  # Asegúrate de que no hay errores en la respuesta.
-            content_generated = response.json()["choices"][0]["message"]["content"]
-            return {"generated_content": content_generated}
+        # Utiliza el cliente HTTP persistente para realizar la petición
+        response = await app.state.client.post(
+            'https://api.openai.com/v1/chat/completions',
+            headers=headers,
+            json=payload,
+            timeout=httpx.Timeout(120.0, connect=120.0)
+        )
+        response.raise_for_status()  # Asegúrate de que no hay errores en la respuesta.
+        content_generated = response.json()["choices"][0]["message"]["content"]
+        return {"generated_content": content_generated}
     except httpx.HTTPStatusError as exc:
         logging.error(f"HTTP error occurred: {exc.response.status_code} - {exc.response.text}")
         raise HTTPException(status_code=exc.response.status_code, detail=f"HTTP error: {exc.response.text}")
