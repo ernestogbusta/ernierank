@@ -239,7 +239,7 @@ async def generate_content_endpoint(request: Request):
         }
 
         # Aumento del timeout en la configuración del cliente HTTP
-        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=90.0)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=120.0)) as client:
             response = await client.post(
                 'https://api.openai.com/v1/chat/completions',
                 headers=headers,
