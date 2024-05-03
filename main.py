@@ -206,41 +206,39 @@ class ContentRequest(BaseModel):
 
 @app.post("/generate_content")
 async def generate_content_endpoint(request: Request):
-    logging.debug(f"Request received: {await request.json()}")
-    req_data = await request.json()
-    url = req_data.get("url")
-
+    data = await request.json()
+    url = data.get("url")
     if not url:
         logging.error("URL not provided in the request")
-        raise HTTPException(status_code=422, detail="URL parameter is required.")
+        raise HTTPException(status_code=422, detail="URL parameter is required")
 
-    try:
-        new_data = await process_new_data(url, app.state.client)
-        if not new_data:
-            logging.error(f"No data could be processed from the URL: {url}")
-            raise HTTPException(status_code=500, detail="Failed to process new data")
+    api_key = os.getenv("OPENAI_API_KEY")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                'https://api.openai.com/v1/completions',
-                headers={"Authorization": f"Bearer {app.state.openai_api_key}"},
-                json={
-                    "model": "gpt-4-turbo",
-                    "prompt": new_data,
-                    "max_tokens": 500,
-                    "temperature": 0.5
-                }
-            )
-            response.raise_for_status()
-            content_generated = response.json()["choices"][0]["text"]
+    # Define the request payload according to the latest OpenAI API specifications
+    payload = {
+        "model": "gpt-4-turbo",
+        "messages": [{"role": "system", "content": "Generate content for the following URL"},
+                     {"role": "user", "content": url}],
+        "max_tokens": 500,
+        "temperature": 0.5
+    }
 
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
+        )
+        if response.status_code != 200:
+            logging.error(f"Failed to generate content: {response.text}")
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        
+        content_generated = response.json()["choices"][0]["message"]["content"]
         return {"generated_content": content_generated}
-    except httpx.RequestError as exc:
-        logging.error(f"An error occurred while making HTTP call to OpenAI: {str(exc)}")
-        raise HTTPException(status_code=500, detail=f"HTTP request failed: {str(exc)}")
-    except Exception as e:
-        logging.error(f"An unexpected error occurred: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
 ##############################################

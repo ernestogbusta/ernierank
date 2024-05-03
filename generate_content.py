@@ -125,11 +125,10 @@ async def generate_seo_content(processed_data, client):
 
     return full_content
 
-
 async def call_openai_gpt4(prompt, client, max_tokens):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
-        "Authorization": f"Bearer {api_key}",
+        "Authorization": f"Bearer {os.getenv('OPENAI_API_KEY')}",
         "Content-Type": "application/json"
     }
     payload = {
@@ -138,10 +137,20 @@ async def call_openai_gpt4(prompt, client, max_tokens):
         "max_tokens": max_tokens,
         "temperature": 0.7
     }
-    response = await client.post(url, json=payload, headers=headers, timeout=30)
-    response.raise_for_status()
-    return response.json()["choices"][0]["message"]["content"]
-
+    try:
+        response = await client.post(url, json=payload, headers=headers, timeout=30)
+        response.raise_for_status()  # Raises an httpx.HTTPStatusError if the response has an HTTP error status.
+        data = response.json()
+        return data["choices"][0]["message"]["content"]
+    except httpx.HTTPStatusError as exc:
+        logging.error(f"HTTP error occurred: {exc.response.status_code} - {exc.response.text}")
+        raise
+    except httpx.RequestError as exc:
+        logging.error(f"Request error occurred: {exc}")
+        raise
+    except KeyError as exc:
+        logging.error(f"Unexpected response structure: {exc} - {response.text}")
+        raise
 
 async def fetch_processed_data(url: str, client: httpx.AsyncClient, progress_file: str):
     logging.debug(f"Fetching processed data for URL: {url} from {progress_file}")
