@@ -1,7 +1,7 @@
 openapi: 3.0.0
 info:
   title: ErnieRank API
-  description: API para optimización avanzada del SEO de sitios web, incluyendo procesamiento en lotes de URLs y análisis SEO detallado de cada página con estado HTTP 200, además de análisis de rendimiento web (WPO) utilizando Lighthouse.
+  description: API para optimización avanzada del SEO de sitios web, incluyendo procesamiento en lotes de URLs y análisis SEO detallado de cada página con estado HTTP 200, además de análisis de rendimiento web (WPO) utilizando Lighthouse y generación de contenido basado en SEO.
   version: "1.0"
 servers:
   - url: https://ernierank-vd20.onrender.com
@@ -73,45 +73,87 @@ paths:
         '500':
           description: Error al ejecutar Lighthouse o problemas al obtener resultados del análisis.
 
+  /analyze_cannibalization:
+    post:
+      summary: Analiza la canibalización SEO entre URLs.
+      operationId: analyzeCannibalization
+      tags:
+        - SEO Analysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CannibalizationRequest'
+      responses:
+        '200':
+          description: Devuelve los resultados del análisis de canibalización, incluyendo pares de URLs con niveles de conflicto.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CannibalizationResponse'
+        '400':
+          description: Datos de solicitud faltantes o incorrectos.
+
+  /generate_content:
+    post:
+      summary: Genera contenido optimizado basado en datos SEO de mínimo 1000 palabras.
+      operationId: generateContent
+      tags:
+        - Content Generation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContentRequest'
+      responses:
+        '200':
+          description: Devuelve el contenido SEO generado basado en la información proporcionada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  generated_content:
+                    type: string
+                    description: Contenido generado optimizado para SEO de mínimo 1000 palabras.
+        '400':
+          description: Datos de solicitud faltantes o incorrectos.
+        '500':
+          description: Error interno del servidor.
+
+  /analyze_internal_links:
+    post:
+      summary: Analiza los enlaces internos de un dominio específico.
+      operationId: analyzeInternalLinks
+      tags:
+        - Internal Link Analysis
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                domain:
+                  type: string
+                  description: Dominio del sitio web para analizar.
+                  example: "https://example.com"
+      responses:
+        '200':
+          description: Devuelve el análisis de enlaces internos del sitio.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalLinkAnalysisResponse'
+        '400':
+          description: Datos de solicitud faltantes o incorrectos.
+        '500':
+          description: Error interno al analizar los enlaces internos.
+
 components:
   schemas:
-    SeoAnalysisResponse:
-      type: object
-      properties:
-        url:
-          type: string
-          description: URL procesada.
-        title:
-          type: string
-          description: Título de la página web.
-        meta_description:
-          type: string
-          description: Descripción meta de la página web.
-        slug:
-          type: string
-          description: Fragmento simplificado derivado de la ruta de la URL.
-        h1_tags:
-          type: array
-          items:
-            type: string
-          description: Lista de textos encontrados en etiquetas H1.
-        h2_tags:
-          type: array
-          items:
-            type: string
-          description: Lista de textos encontrados en las primeras tres etiquetas H2.
-        main_keyword:
-          type: string
-          description: Palabra clave principal identificada a partir del contenido de la página.
-        secondary_keywords:
-          type: array
-          items:
-            type: string
-          description: Palabras clave secundarias identificadas en base a relevancia y similitud semántica.
-        semantic_search_intent:
-          type: string
-          description: Clasificación de la intención de búsqueda basada en el análisis de contenido y contexto.
-
     UrlAnalysisBatchResponse:
       type: object
       properties:
@@ -119,26 +161,109 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/SeoAnalysisResponse'
-          description: Lista de resultados del análisis SEO para las URLs procesadas en el lote actual.
         more_batches:
           type: boolean
-          description: Indica si hay más lotes disponibles para procesar.
         next_batch_start:
           type: integer
-          description: Índice en el cual el próximo lote de procesamiento de URLs debería comenzar.
 
     WpoAnalysisResponse:
       type: object
       properties:
         url:
           type: string
-          description: URL analizada.
         performance_score:
           type: number
           format: double
-          description: Puntuación de rendimiento de la página según Lighthouse.
         details:
           type: array
           items:
             type: object
-          description: Detalles específicos de los audits de rendimiento realizados por Lighthouse.
+
+    CannibalizationRequest:
+      type: object
+      properties:
+        processed_urls:
+          type: array
+          items:
+            $ref: '#/components/schemas/CannibalizationData'
+
+    CannibalizationResponse:
+      type: object
+      properties:
+        cannibalization_issues:
+          type: array
+          items:
+            type: object
+            properties:
+              url1:
+                type: string
+                format: uri
+              url2:
+                type: string
+                format: uri
+              cannibalization_level:
+                type: string
+
+    ContentRequest:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+
+    SeoAnalysisResponse:
+      type: object
+      properties:
+        url:
+          type: string
+        title:
+          type: string
+        meta_description:
+          type: string
+        slug:
+          type: string
+        h1_tags:
+          type: array
+          items:
+            type: string
+        h2_tags:
+          type: array
+          items:
+            type: string
+        main_keyword:
+          type: string
+        secondary_keywords:
+          type: array
+          items:
+            type: string
+        semantic_search_intent:
+          type: string
+
+    CannibalizationData:
+      type: object
+      properties:
+        url:
+          type: string
+          format: uri
+        semantic_search_intent:
+          type: string
+
+    InternalLinkAnalysisResponse:
+      type: object
+      properties:
+        internal_links:
+          type: array
+          items:
+            type: object
+            properties:
+              source_url:
+                type: string
+                format: uri
+              target_url:
+                type: string
+                format: uri
+              anchor_text:
+                type: string
+              follow_type:
+                type: string
+                description: "Indicates if the link is 'nofollow' or 'follow'."

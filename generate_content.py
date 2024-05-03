@@ -9,6 +9,8 @@ import os
 import asyncio
 import logging
 from urllib.parse import urlparse
+import functools
+import time
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -28,6 +30,17 @@ headers = {
 class ContentRequest(BaseModel):
     url: HttpUrl
 
+def timing_decorator(func):
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = await func(*args, **kwargs)
+        end_time = time.time()
+        logging.info(f"Tiempo de ejecución de {func.__name__}: {end_time - start_time:.4f} segundos")
+        return result
+    return wrapper
+
+@timing_decorator
 async def process_new_data(url, client):
     retries = 3
     attempt = 0
@@ -72,8 +85,8 @@ async def process_new_data(url, client):
         except Exception as e:
             logging.error(f"Unexpected error occurred while processing data for {url}: {str(e)}")
             return None
-    return None
 
+@timing_decorator
 async def generate_seo_content(processed_data, client):
     title = processed_data.get('title', 'Título no encontrado')
     semantic_intent = processed_data.get('semantic_search_intent', 'Intención no especificada')
@@ -81,28 +94,28 @@ async def generate_seo_content(processed_data, client):
     secondary_keywords = processed_data.get('secondary_keywords', [])
 
     # Configuración para generar descripciones más detalladas
-    max_tokens_title = 100
+    max_tokens_title = 150
     max_tokens_meta = 200
     max_tokens_h1 = 150
-    max_tokens_h2 = 800
+    max_tokens_h2 = 900
 
     # Generar título SEO
     title_prompt = (
-        f"Genera un título SEO de hasta 100 caracteres centrado en {title if title != 'Título no encontrado' else main_keyword}, "
-        f"que sea atractivo pero no sensacionalista ni use expresiones exageradas como vender más y cosas así ni tampoco verbos en imperativo de estilo publicitario y que sea pertinente para la intención de búsqueda '{semantic_intent}'."
+        f"Dame título SEO de 60 caracteres sobre {title if title != 'Título no encontrado' else main_keyword}, "
+        f"atractivo pero que no sensacionalista ni verbos imperativs y sobre este tema '{semantic_intent}'."
     )
     seo_title = f"<title>{await call_openai_gpt4(title_prompt, client, max_tokens_title)}</title>"
 
     # Generar meta descripción
     meta_description_prompt = (
-        f"Genera una meta descripción de hasta 200 caracteres que resuma el contenido del sitio usando '{main_keyword}' y "
-        f"refleje la intención '{semantic_intent}' basada en '{title}'."
+        f"Dame meta descripción de 155 caracteres sobre '{main_keyword}' y "
+        f"y '{semantic_intent}' basada en '{title}'."
     )
     seo_meta_description = f"<meta name='description' content='{await call_openai_gpt4(meta_description_prompt, client, max_tokens_meta)}'>"
 
     # Generar H1
     h1_prompt = (
-        f"Genera un H1 que sea directamente relevante para el contenido y que utilice '{main_keyword}' como enfoque principal."
+        f"Dame H1 relevante sobre '{main_keyword}'"
     )
     seo_h1 = f"<h1>{await call_openai_gpt4(h1_prompt, client, max_tokens_h1)}</h1>"
 
@@ -114,7 +127,7 @@ async def generate_seo_content(processed_data, client):
     for i, keyword in enumerate([main_keyword] + secondary_keywords[:4]):  # Asegura al menos cinco H2 si es posible
         for _ in range(required_paragraphs):
             h2_prompt = (
-                f"Genera un párrafo detallado sobre '{keyword}', asegurando un mínimo de {min_words_per_paragraph} palabras."
+                f"Dame párrafo  sobre '{keyword}', con mínimo {min_words_per_paragraph} palabras."
             )
             paragraph_content = await call_openai_gpt4(h2_prompt, client, max_tokens_h2)
             # Verificar si el párrafo cumple con el mínimo de palabras
@@ -126,6 +139,7 @@ async def generate_seo_content(processed_data, client):
     return full_content
 
 
+@timing_decorator
 async def call_openai_gpt4(prompt, client, max_tokens):
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -139,45 +153,31 @@ async def call_openai_gpt4(prompt, client, max_tokens):
         "temperature": 0.7
     }
 
-    # Aumenta los tiempos de conexión y lectura
-    timeout_config = httpx.Timeout(30.0, connect=60.0)
-
-    try:
-        response = await client.post(url, json=payload, headers=headers, timeout=timeout_config)
-        response.raise_for_status()
-        return response.json()["choices"][0]["message"]["content"]
-    except httpx.TimeoutException as e:
-        logging.error("Request timed out: " + str(e))
-        # Puedes decidir reintentar la solicitud aquí o simplemente lanzar una excepción.
-        raise HTTPException(status_code=408, detail="Request timed out")
-    except httpx.HTTPStatusError as e:
-        logging.error("HTTP status error: " + str(e))
-        raise HTTPException(status_code=e.response.status_code, detail=str(e))
-    except httpx.RequestError as e:
-        logging.error("Request error: " + str(e))
-        raise HTTPException(status_code=500, detail="Error making request to OpenAI")
-    except Exception as e:
-        logging.error("Unexpected error: " + str(e))
-        raise HTTPException(status_code=500, detail="An unexpected error occurred")
-
-
-async def fetch_processed_data(url: str, client: httpx.AsyncClient, progress_file: str):
-    logging.debug(f"Fetching processed data for URL: {url} from {progress_file}")
-    try:
-        with open(progress_file, "r") as file:
-            progress_data = json.load(file)
-        for item in progress_data.get("urls", []):
-            if item["url"] == url:
-                logging.debug(f"Processed data found for URL: {url}")
-                return item
-        logging.warning(f"No processed data found for URL: {url}")
-    except FileNotFoundError:
-        logging.error(f"Progress file {progress_file} not found.")
-        return {}
-    except json.JSONDecodeError:
-        logging.error("JSON decoding failed.")
-        return {}
-    return {}
+    retries = 3  # Número de intentos
+    backoff_factor = 2.0  # Factor de backoff exponencial
+    for attempt in range(retries):
+        try:
+            # Ajusta los tiempos de conexión y lectura, aumentando en cada intento
+            timeout_config = httpx.Timeout(30.0 + 30.0 * attempt, connect=10.0 + 20.0 * attempt)
+            response = await client.post(url, json=payload, headers=headers, timeout=timeout_config)
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+        except httpx.TimeoutException:
+            logging.error(f"Timeout occurred on attempt {attempt + 1} for prompt: {prompt}")
+            if attempt < retries - 1:
+                await asyncio.sleep(backoff_factor ** attempt)  # Exponential backoff
+            else:
+                logging.error("Max retry attempts reached for timeout.")
+                raise HTTPException(status_code=408, detail="Request to OpenAI timed out after multiple retries")
+        except httpx.HTTPStatusError as e:
+            logging.error(f"HTTP status error: {str(e)}")
+            raise HTTPException(status_code=e.response.status_code, detail=str(e))
+        except httpx.RequestError as e:
+            logging.error(f"Request error: {str(e)}")
+            raise HTTPException(status_code=500, detail="Error making request to OpenAI")
+        except Exception as e:
+            logging.error(f"Unexpected error: {str(e)}")
+            raise HTTPException(status_code=500, detail="An unexpected error occurred")
 
 async def fetch_url_data(url, client, retries=3):
     attempt = 0
@@ -195,3 +195,4 @@ async def fetch_url_data(url, client, retries=3):
             break
     logging.error(f"Failed to fetch data from {url} after {retries} attempts.")
     return None
+

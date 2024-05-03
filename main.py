@@ -215,7 +215,7 @@ async def generate_content_endpoint(request: Request):
         raise HTTPException(status_code=422, detail="URL parameter is required.")
 
     try:
-        # Simulación de función para procesar datos desde la URL
+        # Procesa los datos desde la URL
         new_data = await process_new_data(url, app.state.client)
         if not new_data:
             logging.error(f"No data could be processed from the URL: {url}")
@@ -238,12 +238,12 @@ async def generate_content_endpoint(request: Request):
             "temperature": 0.5
         }
 
-        async with httpx.AsyncClient() as client:
+        # Aumento del timeout en la configuración del cliente HTTP
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=90.0)) as client:
             response = await client.post(
                 'https://api.openai.com/v1/chat/completions',
                 headers=headers,
-                json=payload,
-                timeout=httpx.Timeout(30.0, connect=60.0)
+                json=payload
             )
             response.raise_for_status()  # Asegúrate de que no hay errores en la respuesta.
             content_generated = response.json()["choices"][0]["message"]["content"]
