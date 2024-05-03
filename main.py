@@ -27,7 +27,9 @@ app = FastAPI(title="ErnieRank API")
 @app.on_event("startup")
 async def startup_event():
     logging.basicConfig(level=logging.INFO)
-    app.state.client = httpx.AsyncClient()
+    app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not app.state.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
 
 @app.on_event("shutdown")
 async def shutdown_event():
