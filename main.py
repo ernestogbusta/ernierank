@@ -260,13 +260,9 @@ async def generate_content_endpoint(request: Request):
 
 ########### ANALYZE_THIN_CONTENT ##########
 
-
-
 @app.post("/analyze_thin_content")
 async def analyze_thin_content_endpoint(request: ThinContentRequest):
     return await analyze_thin_content(request)
-
-
 
 #######################################
 
