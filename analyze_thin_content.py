@@ -1,7 +1,10 @@
+import re
+import urllib.parse
+import asyncio
 from fastapi import HTTPException
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
-import urllib.parse
+import logging
 
 class PageData(BaseModel):
     url: str
@@ -19,9 +22,9 @@ class ThinContentRequest(BaseModel):
     next_batch_start: Optional[int] = None
 
 async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentRequest:
-    # Esta función simula la obtención de datos procesados o el procesamiento de lotes de datos.
-    # Deberías implementar la lógica real que corresponda a tu sistema o fuente de datos.
-    return ThinContentRequest(processed_urls=[
+    logging.debug(f"Iniciando la obtención de datos procesados para el dominio: {domain}")
+    # Simulación de datos, estos deberían ser extraídos de tu sistema de gestión de contenidos o base de datos
+    processed_data = ThinContentRequest(processed_urls=[
         PageData(
             url='http://example.com/page1',
             title='Example Short Title',
@@ -32,7 +35,6 @@ async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentReq
             secondary_keywords=['example2', 'example3'],
             semantic_search_intent='example intent'
         ),
-        # Agrega más datos simulados según sea necesario para tus pruebas o implementación.
         PageData(
             url='http://example.com/page2',
             title='Second Example Title',
@@ -44,9 +46,16 @@ async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentReq
             semantic_search_intent='second intent'
         )
     ])
+    logging.debug(f"Datos procesados obtenidos para {domain}: {processed_data}")
+    return processed_data
+
+# Asumamos que hemos revisado y confirmado que el max_score es adecuado:
+max_score = 1.0  # Puedes ajustar este valor según el máximo real derivado de tu análisis de componentes.
 
 async def analyze_thin_content(request: ThinContentRequest):
+    logging.debug("Inicio del análisis de contenido delgado.")
     if not request.processed_urls:
+        logging.error("Error: No se proporcionaron URLs para analizar.")
         raise HTTPException(status_code=404, detail="No URL data available for analysis.")
 
     thin_content_pages = []
@@ -55,6 +64,7 @@ async def analyze_thin_content(request: ThinContentRequest):
     for page in request.processed_urls:
         score, details = calculate_thin_content_score_and_details(page, max_score)
         content_level = classify_content_level(score)  # Clasifica el nivel basado en el score normalizado
+        logging.debug(f"URL analizada: {page.url}, Score: {score}, Nivel: {content_level}, Detalles: {details}")
         if content_level != "none":  # Solo agrega páginas que tienen contenido delgado detectable
             thin_content_pages.append({
                 "url": page.url,
@@ -63,32 +73,42 @@ async def analyze_thin_content(request: ThinContentRequest):
                 "details": details
             })
 
+    if thin_content_pages:
+        logging.info(f"Páginas con contenido delgado detectado: {len(thin_content_pages)}")
+    else:
+        logging.info("No se detectó contenido delgado en las URLs analizadas.")
+    
     return {"thin_content_pages": thin_content_pages} if thin_content_pages else {"message": "No thin content detected"}
 
 def classify_content_level(normalized_score: float) -> str:
     """
     Classifica el nivel de contenido en función del puntaje de contenido delgado normalizado.
     """
+    logging.debug(f"Clasificando el nivel de contenido con puntuación normalizada: {normalized_score}")
     if normalized_score >= 0.6:
+        logging.info("Contenido clasificado como 'high'")
         return "high"
     elif normalized_score >= 0.3:
+        logging.info("Contenido clasificado como 'medium'")
         return "medium"
     elif normalized_score > 0:
+        logging.info("Contenido clasificado como 'low'")
         return "low"
+    logging.info("Contenido clasificado como 'none'")
     return "none"
 
-# Asumamos que hemos revisado y confirmado que el max_score es adecuado:
-max_score = 1.0  # Puedes ajustar este valor según el máximo real derivado de tu análisis de componentes.
+# Precompile regular expressions for efficiency
+hyphen_space_pattern = re.compile(r'-')
+stopwords = set(["de", "la", "el", "en", "y", "a", "los", "un", "como", "una", "por"])
 
-def calculate_thin_content_score_and_details(page: PageData, max_score: float = 1.0) -> Tuple[float, str]:
-    stopwords = {"de", "la", "el", "en", "y", "a", "los", "un", "como", "una", "por"}
+def clean_and_split(text: str) -> str:
+    """Cleans and splits the text by removing specified stopwords and replacing hyphens with spaces."""
+    return ' '.join(word for word in hyphen_space_pattern.sub(' ', text.lower()).split() if word not in stopwords)
+
+async def calculate_thin_content_score_and_details(page: PageData, max_score: float = 1.0) -> Tuple[float, str]:
     score = 0
     issues = []
     total_possible_score = 6.35  # Suma máxima de todas las penalizaciones más severas posibles
-
-    def clean_and_split(text: str) -> str:
-        """Cleans and splits the text by removing specified stopwords and replacing hyphens with spaces."""
-        return ' '.join(word for word in text.replace('-', ' ').lower().split() if word not in stopwords)
 
     title_normalized = clean_and_split(page.title)
     keyword_normalized = clean_and_split(page.main_keyword)
@@ -149,3 +169,22 @@ def calculate_thin_content_score_and_details(page: PageData, max_score: float = 
     normalized_score = score / total_possible_score if total_possible_score != 0 else 0  # Evitar división por cero
     details = ', '.join(issues) if issues else 'No hay errores de thin content'
     return normalized_score, details
+
+async def analyze_thin_content(request: ThinContentRequest):
+    if not request.processed_urls:
+        raise HTTPException(status_code=404, detail="No URL data available for analysis.")
+
+    tasks = [calculate_thin_content_score_and_details(page) for page in request.processed_urls]
+    results = await asyncio.gather(*tasks)
+
+    thin_content_pages = [
+        {
+            "url": page.url,
+            "thin_score": result[0] * max_score,  # Muestra el score en escala real de 0 a 1
+            "level": classify_content_level(result[0]),
+            "details": result[1]
+        }
+        for page, result in zip(request.processed_urls, results) if classify_content_level(result[0]) != "none"
+    ]
+
+    return {"thin_content_pages": thin_content_pages} if thin_content_pages else {"message": "No thin content detected"}

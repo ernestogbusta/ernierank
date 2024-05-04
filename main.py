@@ -260,9 +260,19 @@ async def generate_content_endpoint(request: Request):
 
 ########### ANALYZE_THIN_CONTENT ##########
 
+# Configurando el logger
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
 @app.post("/analyze_thin_content")
 async def analyze_thin_content_endpoint(request: ThinContentRequest):
-    return await analyze_thin_content(request)
+    logging.debug("Inicio del análisis de contenido delgado.")
+    try:
+        result = await analyze_thin_content(request)
+        logging.debug("Análisis de contenido delgado completado exitosamente.")
+        return result
+    except Exception as e:
+        logging.error(f"Error durante el análisis de contenido delgado: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 #######################################
 
