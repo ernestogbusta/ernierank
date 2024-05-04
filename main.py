@@ -17,6 +17,7 @@ import uvicorn
 from collections import Counter
 from typing import List, Dict, Optional
 from urllib.parse import urlparse
+import urllib.parse
 import re
 import asyncio
 import time
@@ -39,10 +40,6 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.client.aclose()
-
-@app.get("/")
-async def root():
-    return {"message": "Hello World"}
 
 # Configuración del logger
 logging.basicConfig(level=logging.DEBUG,
@@ -279,14 +276,12 @@ class PageData(BaseModel):
     @validator('h1', 'meta_description', 'main_keyword', pre=True, always=True)
     def ensure_not_empty(cls, v):
         if v == "":
-            logging.debug(f"Received empty string for a critical field, converting it to None")
             return None
         return v
 
     @validator('h2', pre=True, always=True)
     def ensure_list(cls, v):
         if v is None:
-            logging.debug(f"No H2 tags provided, initializing as empty list")
             return []
         return v
 
@@ -303,32 +298,41 @@ class ThinContentRequest(BaseModel):
         return v
 
 @app.post("/analyze_thin_content")
-async def analyze_thin_content_endpoint(request: ThinContentRequest):
-    logging.debug(f"Request received with data: {request}")
-    if not request.processed_urls:
-        logging.error("Request failed: No URLs provided")
-        raise HTTPException(status_code=400, detail="No URLs provided")
-    
+async def analyze_thin_content_endpoint(request: Request):
     try:
-        thin_content_results = await analyze_thin_content(request)
-        logging.info("Thin content analysis completed successfully")
-    except Exception as e:
-        logging.error(f"Error during analysis: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        request_data = await request.json()
+        thin_request = ThinContentRequest(**request_data)
+        logging.debug(f"Request received with data: {thin_request}")
 
-    formatted_results = {
-        "data": [
-            {
-                "url": page["url"],
-                "score": page["thin_score"],
-                "level": page["level"],
-                "details": page["details"]
-            } for page in thin_content_results.get("thin_content_pages", [])
-        ],
-        "message": thin_content_results.get("message", "Analysis completed")
-    }
-    logging.debug(f"Formatted results: {formatted_results}")
-    return formatted_results
+        if not thin_request.processed_urls:
+            logging.error("No URLs provided in the request.")
+            raise HTTPException(status_code=400, detail="No URLs provided")
+
+        # Realiza el análisis de contenido delgado
+        analysis_results = await analyze_thin_content(thin_request)
+        logging.info(f"Processing results: {analysis_results}")
+
+        # Modifica la respuesta para ajustarse a los requisitos especificados
+        formatted_response = {
+            "thin_content_pages": [
+                {
+                    "url": urllib.parse.urlparse(page["url"]).path,  # Devuelve solo la parte del path de la URL
+                    "level": page["level"],
+                    "description": page["details"]
+                }
+                for page in analysis_results["thin_content_pages"]
+            ]
+        }
+
+        return formatted_response
+
+    except Exception as e:
+        logging.error(f"Error during request processing: {str(e)}")
+        raise HTTPException(status_code=422, detail=f"Error processing the request: {str(e)}")
+
+@app.get("/")
+def read_root():
+    return {"Hello": "World"}
 
 def tarea_demorada(nombre: str):
     logging.debug(f"Iniciando tarea demorada para {nombre}")
@@ -348,17 +352,23 @@ def analyze_content_in_background(request: ThinContentRequest):
     logging.debug("Análisis de contenido delgado en segundo plano completado")
 
 async def analyze_thin_content_directly(request: ThinContentRequest):
+    if not request.processed_urls:
+        raise HTTPException(status_code=400, detail="No URLs provided")
     results = []
     for page in request.processed_urls:
-        score, level, details = await calculate_thin_content_score_and_details(page)
-        results.append({
-            "url": page.url,
-            "score": score,
-            "level": level,
-            "details": details
-        })
+        try:
+            score, level, details = await calculate_thin_content_score_and_details(page)
+            results.append({
+                "url": page.url,
+                "score": score,
+                "level": level,
+                "details": details
+            })
+            logging.debug(f"Processed {page.url} with score {score}, level {level}.")
+        except Exception as e:
+            logging.error(f"Failed to process {page.url}: {str(e)}")
+            continue
     return {"message": "Análisis completado", "data": results}
-
 
 #######################################
 

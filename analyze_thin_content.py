@@ -110,24 +110,24 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
 
     # Title Analysis
     if not page.title:
-        issues.append(f"No hay título SEO en {page.url}")
+        issues.append(f"No hay title en {page.url}")
         score += 1
     elif len(page.title) < 10:
-        issues.append(f"Título SEO muy corto en {page.url}")
+        issues.append(f"Title muy corto en {page.url}")
         score += 0.8
     if keyword_normalized not in title_normalized:
-        issues.append(f"Keyword '{page.main_keyword}' no incluida en el título SEO en {page.url}")
+        issues.append(f"Keyword '{page.main_keyword}' no incluida en title en {page.url}")
         score += 1
 
     # Meta Description Analysis
     if not page.meta_description:
-        issues.append(f"No meta description in {page.url}")
+        issues.append(f"No hay meta description en {page.url}")
         score += 0.6
     elif len(page.meta_description) < 50:
-        issues.append(f"meta description too short in {page.url}")
+        issues.append(f"Meta description muy pobre en {page.url}")
         score += 0.5
     if page.meta_description and keyword_normalized not in clean_and_split(page.meta_description):
-        issues.append(f"Keyword '{page.main_keyword}' no incluida en la meta description en {page.url}")
+        issues.append(f"Keyword '{page.main_keyword}' no incluida en meta description en {page.url}")
         score += 0.25
 
     # H1 Analysis
@@ -138,7 +138,7 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
         issues.append(f"h1 muy corto en {page.url}")
         score += 0.8
     if page.h1 and keyword_normalized not in clean_and_split(page.h1):
-        issues.append(f"Keyword '{page.main_keyword}' no incluida en el h1 {page.url}")
+        issues.append(f"Keyword '{page.main_keyword}' no incluida en h1 en {page.url}")
         score += 0.9
 
     # H2 Analysis
@@ -157,11 +157,11 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
 
     # Slug Analysis
     if keyword_normalized not in slug_normalized:
-        issues.append(f"El slug no incluye la keyword principal '{page.main_keyword}' at {page.url}")
+        issues.append(f"El slug no incluye la keyword '{page.main_keyword}' at {page.url}")
         score += 1
 
     normalized_score = score / total_possible_score if total_possible_score != 0 else 0  # Evitar división por cero
-    details = ', '.join(issues) if issues else 'No hay errores de thin content'
+    details = ', '.join(issues) if issues else 'Enhorabuena, no hay errores de thin content'
     return normalized_score, details
 
 async def analyze_thin_content(request: ThinContentRequest):
