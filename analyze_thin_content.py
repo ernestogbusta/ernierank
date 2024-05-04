@@ -6,6 +6,10 @@ from pydantic import BaseModel, HttpUrl, validator
 from typing import List, Optional, Tuple
 import logging
 
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+
 class PageData(BaseModel):
     url: HttpUrl
     title: str
@@ -18,14 +22,14 @@ class PageData(BaseModel):
 
     @validator('h1', 'meta_description', 'main_keyword', pre=True, always=True)
     def ensure_not_empty(cls, v):
-        # Si el valor es una cadena vacía, convertirlo a None
+        logging.debug(f"Validando si el campo está vacío: {v}")
         if v == "":
             return None
         return v
 
     @validator('h2', pre=True, always=True)
     def ensure_list(cls, v):
-        # Asegurarse de que h2 siempre es una lista, incluso si está vacía
+        logging.debug(f"Validando si h2 es una lista: {v}")
         if v is None:
             return []
         return v
@@ -37,13 +41,13 @@ class ThinContentRequest(BaseModel):
 
     @validator('processed_urls', each_item=True)
     def check_urls(cls, v):
+        logging.debug(f"Validando URL y título: {v.url}, {v.title}")
         if not v.title or not v.url:
             raise ValueError("URL and title must be provided for each item.")
         return v
 
 async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentRequest:
     logging.debug(f"Iniciando la obtención de datos procesados para el dominio: {domain}")
-    # Simulación de datos, estos deberían ser extraídos de tu sistema de gestión de contenidos o base de datos
     processed_data = ThinContentRequest(processed_urls=[
         PageData(
             url='http://example.com/page1',
@@ -73,28 +77,26 @@ async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentReq
 max_score = 1.0  # Puedes ajustar este valor según el máximo real derivado de tu análisis de componentes.
 
 def classify_content_level(normalized_score: float) -> str:
-    """
-    Classifica el nivel de contenido en función del puntaje de contenido delgado normalizado.
-    """
     logging.debug(f"Clasificando el nivel de contenido con puntuación normalizada: {normalized_score}")
     if normalized_score >= 0.5:
-        logging.info("Contenido clasificado como 'high'")
+        logging.debug("Contenido clasificado como 'high'")
         return "high"
     elif normalized_score >= 0.25:
-        logging.info("Contenido clasificado como 'medium'")
+        logging.debug("Contenido clasificado como 'medium'")
         return "medium"
     elif normalized_score > 0.1:
-        logging.info("Contenido clasificado como 'low'")
+        logging.debug("Contenido clasificado como 'low'")
         return "low"
-    logging.info("Contenido clasificado como 'none'")
+    logging.debug("Contenido clasificado como 'none'")
     return "none"
+
 
 # Precompile regular expressions for efficiency
 hyphen_space_pattern = re.compile(r'-')
 stopwords = set(["de", "la", "el", "en", "y", "a", "los", "un", "como", "una", "por"])
 
 def clean_and_split(text: str) -> str:
-    """Cleans and splits the text by removing specified stopwords and replacing hyphens with spaces."""
+    logging.debug(f"Limpieza y división del texto: {text}")
     if text is None:
         return ''
     return ' '.join(word for word in hyphen_space_pattern.sub(' ', text.lower()).split() if word not in stopwords)
@@ -102,13 +104,13 @@ def clean_and_split(text: str) -> str:
 async def calculate_thin_content_score_and_details(page: PageData, max_score: float = 1.0) -> Tuple[float, str]:
     score = 0
     issues = []
-    total_possible_score = 6.35  # Suma máxima de todas las penalizaciones más severas posibles
+    total_possible_score = 6.35
 
     title_normalized = clean_and_split(page.title)
     keyword_normalized = clean_and_split(page.main_keyword)
     slug_normalized = clean_and_split(urllib.parse.urlparse(page.url).path)
 
-    # Title Analysis
+    logging.debug(f"Análisis de título: {title_normalized}, URL: {page.url}")
     if not page.title:
         issues.append(f"No hay title en {page.url}")
         score += 1
@@ -119,7 +121,7 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
         issues.append(f"Keyword '{page.main_keyword}' no incluida en title en {page.url}")
         score += 1
 
-    # Meta Description Analysis
+    logging.debug(f"Análisis de meta descripción: {page.meta_description}")
     if not page.meta_description:
         issues.append(f"No hay meta description en {page.url}")
         score += 0.6
@@ -130,7 +132,7 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
         issues.append(f"Keyword '{page.main_keyword}' no incluida en meta description en {page.url}")
         score += 0.25
 
-    # H1 Analysis
+    logging.debug(f"Análisis de H1: {page.h1}")
     if not page.h1:
         issues.append(f"No hay H1 en {page.url}")
         score += 1
@@ -141,7 +143,7 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
         issues.append(f"Keyword '{page.main_keyword}' no incluida en h1 en {page.url}")
         score += 0.9
 
-    # H2 Analysis
+    logging.debug(f"Análisis de H2: {page.h2}")
     if not page.h2:
         issues.append(f"No hay h2 en {page.url}")
         score += 0.7
@@ -153,14 +155,14 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
                 h2_issues += 0.5
             if keyword_normalized not in h2_normalized:
                 h2_issues += 0.4
-        score += min(h2_issues, 0.7)  # No exceder 0.7 en total para todos los H2
+        score += min(h2_issues, 0.7)
 
-    # Slug Analysis
+    logging.debug(f"Análisis de slug: {slug_normalized}")
     if keyword_normalized not in slug_normalized:
-        issues.append(f"El slug no incluye la keyword '{page.main_keyword}' at {page.url}")
+        issues.append(f"El slug no incluye la keyword '{page.main_keyword}' en {page.url}")
         score += 1
 
-    normalized_score = score / total_possible_score if total_possible_score != 0 else 0  # Evitar división por cero
+    normalized_score = score / total_possible_score if total_possible_score != 0 else 0
     details = ', '.join(issues) if issues else 'Enhorabuena, no hay errores de thin content'
     return normalized_score, details
 
@@ -168,13 +170,14 @@ async def analyze_thin_content(request: ThinContentRequest):
     if not request.processed_urls:
         raise HTTPException(status_code=404, detail="No URL data available for analysis.")
 
+    logging.debug(f"Procesando análisis de contenido delgado para {len(request.processed_urls)} URLs.")
     tasks = [calculate_thin_content_score_and_details(page) for page in request.processed_urls]
     results = await asyncio.gather(*tasks)
 
     thin_content_pages = [
         {
             "url": page.url,
-            "thin_score": result[0] * max_score,  # Muestra el score en escala real de 0 a 1
+            "thin_score": result[0] * max_score,
             "level": classify_content_level(result[0]),
             "details": result[1]
         }
