@@ -4,6 +4,7 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
+from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, ThinContentRequest, calculate_thin_content_score_and_details, fetch_processed_data_or_process_batches
 from generate_content import generate_seo_content, process_new_data
 from fastapi import FastAPI, HTTPException, Request, Body
 import httpx
@@ -255,6 +256,19 @@ async def generate_content_endpoint(request: Request):
 
 
 ##############################################
+
+
+########### ANALYZE_THIN_CONTENT ##########
+
+
+
+@app.post("/analyze_thin_content")
+async def analyze_thin_content_endpoint(request: ThinContentRequest):
+    return await analyze_thin_content(request)
+
+
+
+#######################################
 
 
 
