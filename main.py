@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 import xmltodict
 import os
 import json
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, validator
 import uvicorn
 from collections import Counter
 from typing import List, Dict, Optional
@@ -267,17 +267,53 @@ async def generate_content_endpoint(request: Request):
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class PageData(BaseModel):
-    url: str
+    url: HttpUrl
     title: str
-    meta_description: str
+    meta_description: Optional[str] = None
     h1: Optional[str] = None
     h2: Optional[List[str]] = []
-    main_keyword: str
+    main_keyword: Optional[str] = None
     secondary_keywords: List[str]
     semantic_search_intent: str
 
+    @validator('meta_description', 'main_keyword', always=True)
+    def check_empty_strings(cls, v, values, **kwargs):
+        if v == "":
+            return None
+        return v
+
 class ThinContentRequest(BaseModel):
     processed_urls: List[PageData]
+    more_batches: bool = False
+    next_batch_start: Optional[int] = None
+
+    @validator('processed_urls', each_item=True)
+    def check_urls(cls, v):
+        if not v.title or not v.url:
+            raise ValueError("URL and title must be provided for each item.")
+        return v
+
+@app.post("/analyze_thin_content")
+async def analyze_thin_content_endpoint(request: ThinContentRequest):
+    logging.debug(f"Request received: {request}")
+    if not request.processed_urls:
+        raise HTTPException(status_code=400, detail="No URLs provided")
+    
+    # Utilizando la función analyze_thin_content que procesa la solicitud ThinContentRequest
+    thin_content_results = await analyze_thin_content(request)
+    # Asegurándose de que la respuesta contenga los campos requeridos
+    formatted_results = {
+        "data": [
+            {
+                "url": page["url"],
+                "score": page["thin_score"],
+                "level": page["level"],
+                "details": page["details"]
+            } for page in thin_content_results.get("thin_content_pages", [])
+        ],
+        "message": thin_content_results.get("message", "Analysis completed")
+    }
+    return formatted_results
 
 def tarea_demorada(nombre: str):
     logging.debug(f"Iniciando tarea para {nombre}")
@@ -295,27 +331,6 @@ def analyze_content_in_background(request: ThinContentRequest):
         logging.debug(f"Analizando {page.url}...")
     logging.debug("Análisis de contenido delgado completado.")
 
-@app.post("/analyze_thin_content")
-async def analyze_thin_content_endpoint(request: ThinContentRequest):
-    if not request.processed_urls:
-        raise HTTPException(status_code=400, detail="No URLs provided")
-    
-    # Realiza el análisis directamente aquí y espera a que se complete.
-    thin_content_results = await analyze_thin_content_directly(request)
-    return thin_content_results
-
-async def analyze_thin_content_directly(request: ThinContentRequest):
-    results = []
-    for page in request.processed_urls:
-        score, details = await calculate_thin_content_score_and_details(page)  # Asumiendo que esta función es asíncrona
-        level = classify_content_level(score)  # Clasifica el nivel basado en el score
-        results.append({
-            "url": page.url,
-            "thin content level": level,
-            "details": details
-        })
-    return {"message": "Análisis completado", "data": results}
-    
 
 #######################################
 

@@ -2,24 +2,36 @@ import re
 import urllib.parse
 import asyncio
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl, validator
 from typing import List, Optional, Tuple
 import logging
 
 class PageData(BaseModel):
-    url: str
+    url: HttpUrl
     title: str
-    meta_description: str
+    meta_description: Optional[str] = None
     h1: Optional[str] = None
     h2: Optional[List[str]] = []
-    main_keyword: str
+    main_keyword: Optional[str] = None
     secondary_keywords: List[str]
     semantic_search_intent: str
 
+    @validator('meta_description', 'main_keyword', always=True)
+    def check_empty_strings(cls, v, values, **kwargs):
+        if v == "":
+            return None
+        return v
+
 class ThinContentRequest(BaseModel):
     processed_urls: List[PageData]
-    more_batches: Optional[bool] = False
+    more_batches: bool = False
     next_batch_start: Optional[int] = None
+
+    @validator('processed_urls', each_item=True)
+    def check_urls(cls, v):
+        if not v.title or not v.url:
+            raise ValueError("URL and title must be provided for each item.")
+        return v
 
 async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentRequest:
     logging.debug(f"Iniciando la obtención de datos procesados para el dominio: {domain}")
@@ -57,13 +69,13 @@ def classify_content_level(normalized_score: float) -> str:
     Classifica el nivel de contenido en función del puntaje de contenido delgado normalizado.
     """
     logging.debug(f"Clasificando el nivel de contenido con puntuación normalizada: {normalized_score}")
-    if normalized_score >= 0.6:
+    if normalized_score >= 0.5:
         logging.info("Contenido clasificado como 'high'")
         return "high"
-    elif normalized_score >= 0.3:
+    elif normalized_score >= 0.25:
         logging.info("Contenido clasificado como 'medium'")
         return "medium"
-    elif normalized_score > 0:
+    elif normalized_score > 0.1:
         logging.info("Contenido clasificado como 'low'")
         return "low"
     logging.info("Contenido clasificado como 'none'")
@@ -75,6 +87,8 @@ stopwords = set(["de", "la", "el", "en", "y", "a", "los", "un", "como", "una", "
 
 def clean_and_split(text: str) -> str:
     """Cleans and splits the text by removing specified stopwords and replacing hyphens with spaces."""
+    if text is None:
+        return ''
     return ' '.join(word for word in hyphen_space_pattern.sub(' ', text.lower()).split() if word not in stopwords)
 
 async def calculate_thin_content_score_and_details(page: PageData, max_score: float = 1.0) -> Tuple[float, str]:
