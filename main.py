@@ -347,6 +347,18 @@ def analyze_content_in_background(request: ThinContentRequest):
         logging.debug(f"Analizando en segundo plano {page.url}")
     logging.debug("Análisis de contenido delgado en segundo plano completado")
 
+async def analyze_thin_content_directly(request: ThinContentRequest):
+    results = []
+    for page in request.processed_urls:
+        score, level, details = await calculate_thin_content_score_and_details(page)
+        results.append({
+            "url": page.url,
+            "score": score,
+            "level": level,
+            "details": details
+        })
+    return {"message": "Análisis completado", "data": results}
+
 
 #######################################
 
