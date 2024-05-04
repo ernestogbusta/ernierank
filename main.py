@@ -344,6 +344,10 @@ async def analyze_thin_content_endpoint(request: Request):
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
+    
+@app.head("/")
+def read_root():
+    return Response(content=None, status_code=200)
 
 def tarea_demorada(nombre: str):
     logging.debug(f"Iniciando tarea demorada para {nombre}")
