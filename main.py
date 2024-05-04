@@ -278,15 +278,15 @@ class PageData(BaseModel):
 
     @validator('h1', 'meta_description', 'main_keyword', pre=True, always=True)
     def ensure_not_empty(cls, v):
-        # Si el valor es una cadena vacía, convertirlo a None
         if v == "":
+            logging.debug(f"Received empty string for a critical field, converting it to None")
             return None
         return v
 
     @validator('h2', pre=True, always=True)
     def ensure_list(cls, v):
-        # Asegurarse de que h2 siempre es una lista, incluso si está vacía
         if v is None:
+            logging.debug(f"No H2 tags provided, initializing as empty list")
             return []
         return v
 
@@ -298,18 +298,24 @@ class ThinContentRequest(BaseModel):
     @validator('processed_urls', each_item=True)
     def check_urls(cls, v):
         if not v.title or not v.url:
+            logging.error(f"Validation error for URL data: {v}")
             raise ValueError("URL and title must be provided for each item.")
         return v
 
 @app.post("/analyze_thin_content")
 async def analyze_thin_content_endpoint(request: ThinContentRequest):
-    logging.debug(f"Request received: {request}")
+    logging.debug(f"Request received with data: {request}")
     if not request.processed_urls:
+        logging.error("Request failed: No URLs provided")
         raise HTTPException(status_code=400, detail="No URLs provided")
     
-    # Utilizando la función analyze_thin_content que procesa la solicitud ThinContentRequest
-    thin_content_results = await analyze_thin_content(request)
-    # Asegurándose de que la respuesta contenga los campos requeridos
+    try:
+        thin_content_results = await analyze_thin_content(request)
+        logging.info("Thin content analysis completed successfully")
+    except Exception as e:
+        logging.error(f"Error during analysis: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
     formatted_results = {
         "data": [
             {
@@ -321,23 +327,25 @@ async def analyze_thin_content_endpoint(request: ThinContentRequest):
         ],
         "message": thin_content_results.get("message", "Analysis completed")
     }
+    logging.debug(f"Formatted results: {formatted_results}")
     return formatted_results
 
 def tarea_demorada(nombre: str):
-    logging.debug(f"Iniciando tarea para {nombre}")
+    logging.debug(f"Iniciando tarea demorada para {nombre}")
     time.sleep(10)  # Simula un proceso que tarda 10 segundos
-    logging.debug(f"Tarea completada para {nombre}")
+    logging.debug(f"Tarea {nombre} completada")
 
 @app.post("/start-delayed-task/")
 async def start_delayed_task(nombre: str, background_tasks: BackgroundTasks):
     background_tasks.add_task(tarea_demorada, nombre=nombre)
+    logging.info(f"Tarea demorada iniciada en segundo plano para {nombre}")
     return {"message": "Tarea demorada iniciada en segundo plano"}
 
 def analyze_content_in_background(request: ThinContentRequest):
-    logging.debug("Iniciando análisis de contenido delgado...")
+    logging.debug("Iniciando análisis de contenido delgado en segundo plano")
     for page in request.processed_urls:
-        logging.debug(f"Analizando {page.url}...")
-    logging.debug("Análisis de contenido delgado completado.")
+        logging.debug(f"Analizando en segundo plano {page.url}")
+    logging.debug("Análisis de contenido delgado en segundo plano completado")
 
 
 #######################################
