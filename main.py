@@ -280,9 +280,9 @@ class ThinContentRequest(BaseModel):
     processed_urls: List[PageData]
 
 def tarea_demorada(nombre: str):
-    print(f"Iniciando tarea para {nombre}")
+    logging.debug(f"Iniciando tarea para {nombre}")
     time.sleep(10)  # Simula un proceso que tarda 10 segundos
-    print(f"Tarea completada para {nombre}")
+    logging.debug(f"Tarea completada para {nombre}")
 
 @app.post("/start-delayed-task/")
 async def start_delayed_task(nombre: str, background_tasks: BackgroundTasks):
@@ -290,13 +290,13 @@ async def start_delayed_task(nombre: str, background_tasks: BackgroundTasks):
     return {"message": "Tarea demorada iniciada en segundo plano"}
 
 def analyze_content_in_background(request: ThinContentRequest):
-    print("Iniciando análisis de contenido delgado...")
+    logging.debug("Iniciando análisis de contenido delgado...")
     for page in request.processed_urls:
-        print(f"Analizando {page.url}...")
-    print("Análisis de contenido delgado completado.")
+        logging.debug(f"Analizando {page.url}...")
+    logging.debug("Análisis de contenido delgado completado.")
 
 @app.post("/analyze_thin_content")
-async def analyze_thin_content(request: ThinContentRequest):
+async def analyze_thin_content_endpoint(request: ThinContentRequest):
     if not request.processed_urls:
         raise HTTPException(status_code=400, detail="No URLs provided")
     
@@ -315,6 +315,7 @@ async def analyze_thin_content_directly(request: ThinContentRequest):
             "details": details
         })
     return {"message": "Análisis completado", "data": results}
+    
 
 #######################################
 
