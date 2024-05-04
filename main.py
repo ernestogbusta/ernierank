@@ -4,9 +4,9 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
-from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, ThinContentRequest, calculate_thin_content_score_and_details, fetch_processed_data_or_process_batches
+from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
 from generate_content import generate_seo_content, process_new_data
-from fastapi import FastAPI, HTTPException, Request, Body
+from fastapi import FastAPI, HTTPException, Request, Body, BackgroundTasks
 import httpx
 from bs4 import BeautifulSoup
 import xmltodict
@@ -22,8 +22,11 @@ import asyncio
 import time
 import requests
 import logging
+from starlette.middleware.gzip import GZipMiddleware
 
 app = FastAPI(title="ErnieRank API")
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 @app.on_event("startup")
 async def startup_event():
@@ -263,16 +266,55 @@ async def generate_content_endpoint(request: Request):
 # Configurando el logger
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
+class PageData(BaseModel):
+    url: str
+    title: str
+    meta_description: str
+    h1: Optional[str] = None
+    h2: Optional[List[str]] = []
+    main_keyword: str
+    secondary_keywords: List[str]
+    semantic_search_intent: str
+
+class ThinContentRequest(BaseModel):
+    processed_urls: List[PageData]
+
+def tarea_demorada(nombre: str):
+    print(f"Iniciando tarea para {nombre}")
+    time.sleep(10)  # Simula un proceso que tarda 10 segundos
+    print(f"Tarea completada para {nombre}")
+
+@app.post("/start-delayed-task/")
+async def start_delayed_task(nombre: str, background_tasks: BackgroundTasks):
+    background_tasks.add_task(tarea_demorada, nombre=nombre)
+    return {"message": "Tarea demorada iniciada en segundo plano"}
+
+def analyze_content_in_background(request: ThinContentRequest):
+    print("Iniciando análisis de contenido delgado...")
+    for page in request.processed_urls:
+        print(f"Analizando {page.url}...")
+    print("Análisis de contenido delgado completado.")
+
 @app.post("/analyze_thin_content")
-async def analyze_thin_content_endpoint(request: ThinContentRequest):
-    logging.debug("Inicio del análisis de contenido delgado.")
-    try:
-        result = await analyze_thin_content(request)
-        logging.debug("Análisis de contenido delgado completado exitosamente.")
-        return result
-    except Exception as e:
-        logging.error(f"Error durante el análisis de contenido delgado: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+async def analyze_thin_content(request: ThinContentRequest):
+    if not request.processed_urls:
+        raise HTTPException(status_code=400, detail="No URLs provided")
+    
+    # Realiza el análisis directamente aquí y espera a que se complete.
+    thin_content_results = await analyze_thin_content_directly(request)
+    return thin_content_results
+
+async def analyze_thin_content_directly(request: ThinContentRequest):
+    results = []
+    for page in request.processed_urls:
+        score, details = await calculate_thin_content_score_and_details(page)  # Asumiendo que esta función es asíncrona
+        level = classify_content_level(score)  # Clasifica el nivel basado en el score
+        results.append({
+            "url": page.url,
+            "thin content level": level,
+            "details": details
+        })
+    return {"message": "Análisis completado", "data": results}
 
 #######################################
 

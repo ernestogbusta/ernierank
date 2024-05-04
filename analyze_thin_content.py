@@ -52,34 +52,6 @@ async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentReq
 # Asumamos que hemos revisado y confirmado que el max_score es adecuado:
 max_score = 1.0  # Puedes ajustar este valor según el máximo real derivado de tu análisis de componentes.
 
-async def analyze_thin_content(request: ThinContentRequest):
-    logging.debug("Inicio del análisis de contenido delgado.")
-    if not request.processed_urls:
-        logging.error("Error: No se proporcionaron URLs para analizar.")
-        raise HTTPException(status_code=404, detail="No URL data available for analysis.")
-
-    thin_content_pages = []
-    max_score = 1.0  # Este es el valor máximo para un escenario de thin content completamente negativo.
-
-    for page in request.processed_urls:
-        score, details = calculate_thin_content_score_and_details(page, max_score)
-        content_level = classify_content_level(score)  # Clasifica el nivel basado en el score normalizado
-        logging.debug(f"URL analizada: {page.url}, Score: {score}, Nivel: {content_level}, Detalles: {details}")
-        if content_level != "none":  # Solo agrega páginas que tienen contenido delgado detectable
-            thin_content_pages.append({
-                "url": page.url,
-                "thin_score": score * max_score,  # Muestra el score en escala real de 0 a 1
-                "level": content_level,
-                "details": details
-            })
-
-    if thin_content_pages:
-        logging.info(f"Páginas con contenido delgado detectado: {len(thin_content_pages)}")
-    else:
-        logging.info("No se detectó contenido delgado en las URLs analizadas.")
-    
-    return {"thin_content_pages": thin_content_pages} if thin_content_pages else {"message": "No thin content detected"}
-
 def classify_content_level(normalized_score: float) -> str:
     """
     Classifica el nivel de contenido en función del puntaje de contenido delgado normalizado.
