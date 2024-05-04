@@ -6,7 +6,7 @@ from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
 from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
 from generate_content import generate_seo_content, process_new_data
-from fastapi import FastAPI, HTTPException, Request, Body, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, Body, BackgroundTasks, Response
 import httpx
 from bs4 import BeautifulSoup
 import xmltodict
@@ -46,6 +46,14 @@ logging.basicConfig(level=logging.DEBUG,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
 logger = logging.getLogger("CannibalizationAnalysis")
+
+@app.get("/")
+def read_root():
+    return {"Hello": "World"}
+
+@app.head("/")
+def read_root():
+    return Response(content=None, status_code=200)
 
 ########## ANALYZE_URL ############
 
@@ -340,14 +348,6 @@ async def analyze_thin_content_endpoint(request: Request):
     except Exception as e:
         logging.critical(f"Unexpected error during request processing: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-@app.get("/")
-def read_root():
-    return {"Hello": "World"}
-    
-@app.head("/")
-def read_root():
-    return Response(content=None, status_code=200)
 
 def tarea_demorada(nombre: str):
     logging.debug(f"Iniciando tarea demorada para {nombre}")
