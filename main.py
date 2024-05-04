@@ -301,18 +301,24 @@ class ThinContentRequest(BaseModel):
 async def analyze_thin_content_endpoint(request: Request):
     try:
         request_data = await request.json()
-        thin_request = ThinContentRequest(**request_data)
-        logging.debug(f"Request received with data: {thin_request}")
+        logging.debug(f"Raw request data: {request_data}")
+
+        try:
+            thin_request = ThinContentRequest(**request_data)
+        except Exception as e:
+            logging.error(f"Error parsing request data: {e}, Data received: {request_data}")
+            raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
+
+        logging.debug(f"Request parsed successfully with data: {thin_request}")
 
         if not thin_request.processed_urls:
             logging.error("No URLs provided in the request.")
             raise HTTPException(status_code=400, detail="No URLs provided")
 
-        # Realiza el análisis de contenido delgado
+        logging.info("Starting thin content analysis.")
         analysis_results = await analyze_thin_content(thin_request)
-        logging.info(f"Processing results: {analysis_results}")
+        logging.info(f"Analysis results obtained: {analysis_results}")
 
-        # Modifica la respuesta para ajustarse a los requisitos especificados
         formatted_response = {
             "thin_content_pages": [
                 {
@@ -323,12 +329,17 @@ async def analyze_thin_content_endpoint(request: Request):
                 for page in analysis_results["thin_content_pages"]
             ]
         }
+        logging.info(f"Formatted response ready to be sent: {formatted_response}")
 
         return formatted_response
 
+    except HTTPException as http_exc:
+        # Log specific for HTTP errors that are raised deliberately
+        logging.error(f"HTTP error during request processing: {http_exc.detail}")
+        raise
     except Exception as e:
-        logging.error(f"Error during request processing: {str(e)}")
-        raise HTTPException(status_code=422, detail=f"Error processing the request: {str(e)}")
+        logging.critical(f"Unexpected error during request processing: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 @app.get("/")
 def read_root():
