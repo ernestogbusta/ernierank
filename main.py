@@ -276,10 +276,18 @@ class PageData(BaseModel):
     secondary_keywords: List[str]
     semantic_search_intent: str
 
-    @validator('meta_description', 'main_keyword', always=True)
-    def check_empty_strings(cls, v, values, **kwargs):
+    @validator('h1', 'meta_description', 'main_keyword', pre=True, always=True)
+    def ensure_not_empty(cls, v):
+        # Si el valor es una cadena vacía, convertirlo a None
         if v == "":
             return None
+        return v
+
+    @validator('h2', pre=True, always=True)
+    def ensure_list(cls, v):
+        # Asegurarse de que h2 siempre es una lista, incluso si está vacía
+        if v is None:
+            return []
         return v
 
 class ThinContentRequest(BaseModel):
