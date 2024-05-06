@@ -68,9 +68,8 @@ class BatchRequest(BaseModel):
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
     urls = await fetch_sitemap(app.state.client, sitemap_url)
-
     if not urls:
-        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
+        raise HTTPException(status_code=404, detail="No URLs found in the sitemap.")
 
     urls_to_process = urls[request.start:request.start + request.batch_size]
     tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
@@ -90,42 +89,49 @@ async def process_urls_in_batches(request: BatchRequest):
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
 
+    formatted_results = format_as_table(valid_results)
     return {
-        "processed_urls": valid_results,
+        "table": formatted_results,
         "more_batches": more_batches,
         "next_batch_start": next_start if more_batches else None
     }
 
+def format_as_table(data):
+    table_header = "| URL | Title | Meta Description | Main Keyword | Secondary Keywords | Semantic Search Intent |\n"
+    table_header += "|-----|-------|-----------------|--------------|-------------------|------------------------|\n"
+    table_rows = ''.join(
+        f"| {item['url']} | {item['title']} | {item['meta_description']} | {item['main_keyword']} | {', '.join(item['secondary_keywords'])} | {item['semantic_search_intent']} |\n"
+        for item in data
+    )
+    return table_header + table_rows
 
 async def fetch_sitemap(client, url):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
-        "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
+        "User-Agent": "Your User-Agent Here",
+        "Accept": "application/xml;q=0.9, */*;q=0.8"
     }
     try:
-        response = await client.get(url, headers=headers, follow_redirects=True)  # Agregar follow_redirects=True
-        response.raise_for_status()  # Asegura que no hay errores de HTTP
-        sitemap_contents = xmltodict.parse(response.content)
-        all_urls = []
-
-        if 'sitemapindex' in sitemap_contents:
-            sitemap_indices = sitemap_contents['sitemapindex']['sitemap']
-            sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
-            for sitemap in sitemap_indices:
-                sitemap_url = sitemap['loc']
-                sitemap_resp = await client.get(sitemap_url, headers=headers, follow_redirects=True)  # Agregar follow_redirects=True
-                sitemap_resp.raise_for_status()
-                individual_sitemap = xmltodict.parse(sitemap_resp.content)
-                urls = [url['loc'] for url in individual_sitemap['urlset']['url']]
-                all_urls.extend(urls)
-        elif 'urlset' in sitemap_contents:
-            all_urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
-
-        print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
+        response = await client.get(url, headers=headers)
+        response.raise_for_status()
+        sitemap_contents = xmltodict.parse(response.text)
+        all_urls = _extract_urls_from_sitemap(sitemap_contents)
         return all_urls
     except Exception as e:
-        print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
-        return None
+        raise HTTPException(status_code=500, detail=f"Failed to fetch or parse sitemap: {str(e)}")
+
+def _extract_urls_from_sitemap(sitemap_contents):
+    urls = []
+    if 'urlset' in sitemap_contents:
+        urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
+    elif 'sitemapindex' in sitemap_contents:
+        for sitemap in sitemap_contents['sitemapindex']['sitemap']:
+            sitemap_url = sitemap['loc']
+            # Necesitas procesar recursivamente cada sitemap
+            # Considera agregar manejo de excepciones o revisión en este punto
+            sitemap_response = httpx.get(sitemap_url)
+            individual_sitemap = xmltodict.parse(sitemap_response.text)
+            urls += [url['loc'] for url in individual_sitemap['urlset']['url']]
+    return urls
 
 ############################################
 
