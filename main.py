@@ -59,17 +59,16 @@ def read_root():
 
 ########## ANALYZE_URL ############
 
-
 class BatchRequest(BaseModel):
     domain: str
     batch_size: int = 100  # valor por defecto
-    start: int = 0        # valor por defecto para iniciar
+    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
-    sitemap_url = f"{request.domain.rstrip('/')}/sitemap.xml"  # Comienza intentando con la ubicación más común
-    client = httpx.AsyncClient(follow_redirects=True)  # Asegúrate de seguir las redirecciones automáticamente
-    urls = await fetch_sitemap(client, sitemap_url)
+    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
+    print(f"Fetching URLs from: {sitemap_url}")
+    urls = await fetch_sitemap(app.state.client, sitemap_url)
 
     if not urls:
         print("No URLs found in the sitemap.")
@@ -79,12 +78,11 @@ async def process_urls_in_batches(request: BatchRequest):
     urls_to_process = urls[request.start:request.start + request.batch_size]
     print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
-    tasks = [analyze_url(url, client) for url in urls_to_process]
+    tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
     results = await asyncio.gather(*tasks)
-    await client.aclose()
-
     print(f"Results received: {results}")
 
+    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
     valid_results = [
         {
             "url": result['url'],
@@ -118,24 +116,18 @@ async def fetch_sitemap(client, url):
         sitemap_contents = xmltodict.parse(response.content)
         all_urls = []
 
-        # Manejo dinámico de sitemap index y urlset
         if 'sitemapindex' in sitemap_contents:
-            # Asegura que sitemap_indices siempre es una lista
-            sitemap_indices = sitemap_contents['sitemapindex'].get('sitemap')
-            if isinstance(sitemap_indices, list):
-                for sitemap in sitemap_indices:
-                    sitemap_url = sitemap['loc']
-                    all_urls.extend(await fetch_sitemap(client, sitemap_url))
-            else:
-                sitemap_url = sitemap_indices['loc']
-                all_urls.extend(await fetch_sitemap(client, sitemap_url))
+            sitemap_indices = sitemap_contents['sitemapindex']['sitemap']
+            sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
+            for sitemap in sitemap_indices:
+                sitemap_url = sitemap['loc']
+                sitemap_resp = await client.get(sitemap_url, headers=headers)
+                sitemap_resp.raise_for_status()
+                individual_sitemap = xmltodict.parse(sitemap_resp.content)
+                urls = [url['loc'] for url in individual_sitemap['urlset']['url']]
+                all_urls.extend(urls)
         elif 'urlset' in sitemap_contents:
-            # Asegura que los URLs siempre son manejados como lista
-            url_entries = sitemap_contents['urlset']['url']
-            if isinstance(url_entries, list):
-                all_urls = [url['loc'] for url in url_entries]
-            else:
-                all_urls = [url_entries['loc']]
+            all_urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
 
         print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
         return all_urls
