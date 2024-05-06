@@ -78,10 +78,10 @@ max_score = 1.0  # Puedes ajustar este valor según el máximo real derivado de 
 
 def classify_content_level(normalized_score: float) -> str:
     logging.debug(f"Clasificando el nivel de contenido con puntuación normalizada: {normalized_score}")
-    if normalized_score >= 0.5:
+    if normalized_score >= 0.6:
         logging.debug("Contenido clasificado como 'high'")
         return "high"
-    elif normalized_score >= 0.25:
+    elif normalized_score >= 0.3:
         logging.debug("Contenido clasificado como 'medium'")
         return "medium"
     elif normalized_score > 0.1:
@@ -93,7 +93,7 @@ def classify_content_level(normalized_score: float) -> str:
 
 # Precompile regular expressions for efficiency
 hyphen_space_pattern = re.compile(r'-')
-stopwords = set(["de", "la", "el", "en", "y", "a", "los", "un", "como", "una", "por"])
+stopwords = set(["de", "la", "el", "en", "y", "a", "los", "un", "como", "una", "por", "para"])
 
 def clean_and_split(text: str) -> str:
     logging.debug(f"Limpieza y división del texto: {text}")
