@@ -8,7 +8,7 @@ from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_p
 from generate_content import generate_seo_content, process_new_data
 from analyze_404 import fetch_urls, check_url, crawl_site, find_broken_links
 from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
-from fastapi import FastAPI, HTTPException, Depends, Body, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, Body, Request, BackgroundTasks, Response
 import httpx
 from httpx import AsyncClient, Timeout, RemoteProtocolError
 from bs4 import BeautifulSoup
