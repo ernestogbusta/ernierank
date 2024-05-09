@@ -1,0 +1,46 @@
+# General
+*.log
+*.csv
+*.dat
+*.out
+*.pid
+*.seed
+
+# Python
+*.py[cod]
+__pycache__/
+*.pyc
+
+# Environment files
+.env
+config.yaml
+google-ads.yaml
+
+# Development tools
+.idea/
+.vscode/
+*.swp
+
+# Dependency directories
+node_modules/
+venv/
+env/
+venv.bak/
+
+# Dist/build folders
+build/
+dist/
+eggs/
+parts/
+bin/
+var/
+sdist/
+wheel/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+
+# Database files
+*.db
+*.sqlite

@@ -438,6 +438,54 @@ async def check_domain(request: DomainRequest):
 ###################################
 
 
+############ SEARCH_KEYWORDS #############
+
+
+# Configuración inicial de pytrends
+pytrends = TrendReq(hl='es-ES', tz=360)
+
+class KeywordRequest(BaseModel):
+    topic: str
+
+async def fetch_google_search_results(topic, max_attempts=5):
+    attempts = 0
+    while attempts < max_attempts:
+        try:
+            pytrends.build_payload([topic])
+            related_queries = pytrends.related_queries()
+            return process_related_queries(related_queries, topic)
+        except Exception as e:
+            attempts += 1
+            sleep_time = (2 ** attempts) * 5  # Tiempo de espera exponencial con base 5 segundos
+            await asyncio.sleep(sleep_time)
+            if attempts == max_attempts:
+                raise HTTPException(status_code=429, detail="Google Trends rate limit exceeded")
+
+def process_related_queries(related_queries, topic):
+    keywords = []
+    max_reference_volume = 100  # Ejemplo de volumen de referencia máximo
+    scaling_factor = 14800 / max_reference_volume
+    excluded_words = ['la', 'el', 'los', 'las']
+
+    if topic in related_queries:
+        related_data = related_queries[topic]['top']
+        for query in related_data.to_dict('records'):
+            if not any(excluded_word in query['query'].split() for excluded_word in excluded_words):
+                scaled_volume = int(query['value'] * scaling_factor)
+                keywords.append({"keyword": query['query'], "volume": scaled_volume})
+    return keywords
+
+@app.post("/search_keywords")
+async def search_keywords(request: KeywordRequest):
+    google_results = await fetch_google_search_results(request.topic)
+    if not google_results:
+        raise HTTPException(status_code=404, detail="No keywords found")
+    return {"keywords": google_results}
+
+
+##########################################
+
+
 
 if __name__ == "__main__":
     import uvicorn
