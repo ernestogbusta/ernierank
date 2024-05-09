@@ -41,3 +41,4 @@ utils==1.0.2
 uvicorn==0.18.2
 xmltodict==0.13.0
 yarl==1.9.4
+pytrends>=4.8.0

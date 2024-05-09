@@ -26,6 +26,7 @@ import time
 import requests
 import logging
 from starlette.middleware.gzip import GZipMiddleware
+from pytrends.request import TrendReq
 
 app = FastAPI(title="ErnieRank API")
 
