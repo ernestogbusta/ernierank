@@ -7,6 +7,7 @@ from analyze_cannibalization import analyze_cannibalization
 from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
 from generate_content import generate_seo_content, process_new_data
 from analyze_404 import fetch_urls, check_url, crawl_site, find_broken_links
+from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
 from fastapi import FastAPI, HTTPException, Depends, Body, Request, BackgroundTasks
 import httpx
 from httpx import AsyncClient, Timeout, RemoteProtocolError
@@ -27,14 +28,14 @@ import requests
 import logging
 from starlette.middleware.gzip import GZipMiddleware
 from pytrends.request import TrendReq
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import PolynomialFeatures
+import numpy as np
 
 app = FastAPI(title="ErnieRank API")
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-
 @app.on_event("startup")
 async def startup_event():
-    logging.basicConfig(level=logging.INFO)
     app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
     if not app.state.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
@@ -43,12 +44,6 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     await app.state.client.aclose()
-
-# Configuración del logger
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-                    datefmt='%Y-%m-%d %H:%M:%S')
-logger = logging.getLogger("CannibalizationAnalysis")
 
 @app.get("/")
 def read_root():
@@ -216,18 +211,15 @@ class ContentRequest(BaseModel):
 
 @app.post("/generate_content")
 async def generate_content_endpoint(request: Request):
-    logging.debug(f"Request received: {await request.json()}")
     req_data = await request.json()
     url = req_data.get("url")
 
     if not url:
-        logging.error("URL not provided in the request")
         raise HTTPException(status_code=422, detail="URL parameter is required.")
 
     try:
         new_data = await process_new_data(url, app.state.client)
         if not new_data:
-            logging.error(f"No data could be processed from the URL: {url}")
             raise HTTPException(status_code=500, detail="Failed to process new data")
 
         headers = {
@@ -256,13 +248,10 @@ async def generate_content_endpoint(request: Request):
         content_generated = response.json()["choices"][0]["message"]["content"]
         return {"generated_content": content_generated}
     except httpx.HTTPStatusError as exc:
-        logging.error(f"HTTP error occurred: {exc.response.status_code} - {exc.response.text}")
         raise HTTPException(status_code=exc.response.status_code, detail=f"HTTP error: {exc.response.text}")
     except httpx.RequestError as exc:
-        logging.error(f"An error occurred while making HTTP call to OpenAI: {str(exc)}")
         raise HTTPException(status_code=500, detail=f"HTTP request failed: {str(exc)}")
     except Exception as e:
-        logging.error(f"An unexpected error occurred: {str(e)}")
         raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
 
 
@@ -272,7 +261,6 @@ async def generate_content_endpoint(request: Request):
 ########### ANALYZE_THIN_CONTENT ##########
 
 # Configurando el logger
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class PageData(BaseModel):
     url: HttpUrl
@@ -304,7 +292,6 @@ class ThinContentRequest(BaseModel):
     @validator('processed_urls', each_item=True)
     def check_urls(cls, v):
         if not v.title or not v.url:
-            logging.error(f"Validation error for URL data: {v}")
             raise ValueError("URL and title must be provided for each item.")
         return v
 
@@ -312,23 +299,16 @@ class ThinContentRequest(BaseModel):
 async def analyze_thin_content_endpoint(request: Request):
     try:
         request_data = await request.json()
-        logging.debug(f"Raw request data: {request_data}")
 
         try:
             thin_request = ThinContentRequest(**request_data)
         except Exception as e:
-            logging.error(f"Error parsing request data: {e}, Data received: {request_data}")
             raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
 
-        logging.debug(f"Request parsed successfully with data: {thin_request}")
-
         if not thin_request.processed_urls:
-            logging.error("No URLs provided in the request.")
             raise HTTPException(status_code=400, detail="No URLs provided")
 
-        logging.info("Starting thin content analysis.")
         analysis_results = await analyze_thin_content(thin_request)
-        logging.info(f"Analysis results obtained: {analysis_results}")
 
         formatted_response = {
             "thin_content_pages": [
@@ -340,31 +320,24 @@ async def analyze_thin_content_endpoint(request: Request):
                 for page in analysis_results["thin_content_pages"]
             ]
         }
-        logging.info(f"Formatted response ready to be sent: {formatted_response}")
 
         return formatted_response
 
     except HTTPException as http_exc:
         # Log specific for HTTP errors that are raised deliberately
-        logging.error(f"HTTP error during request processing: {http_exc.detail}")
         raise
     except Exception as e:
-        logging.critical(f"Unexpected error during request processing: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 def tarea_demorada(nombre: str):
-    logging.debug(f"Iniciando tarea demorada para {nombre}")
     time.sleep(10)  # Simula un proceso que tarda 10 segundos
-    logging.debug(f"Tarea {nombre} completada")
 
 @app.post("/start-delayed-task/")
 async def start_delayed_task(nombre: str, background_tasks: BackgroundTasks):
     background_tasks.add_task(tarea_demorada, nombre=nombre)
-    logging.info(f"Tarea demorada iniciada en segundo plano para {nombre}")
     return {"message": "Tarea demorada iniciada en segundo plano"}
 
 def analyze_content_in_background(request: ThinContentRequest):
-    logging.debug("Iniciando análisis de contenido delgado en segundo plano")
     for page in request.processed_urls:
         logging.debug(f"Analizando en segundo plano {page.url}")
     logging.debug("Análisis de contenido delgado en segundo plano completado")
@@ -382,9 +355,7 @@ async def analyze_thin_content_directly(request: ThinContentRequest):
                 "level": level,
                 "details": details
             })
-            logging.debug(f"Processed {page.url} with score {score}, level {level}.")
         except Exception as e:
-            logging.error(f"Failed to process {page.url}: {str(e)}")
             continue
     return {"message": "Análisis completado", "data": results}
 
@@ -442,6 +413,24 @@ async def check_domain(request: DomainRequest):
 ############ SEARCH_KEYWORDS #############
 
 
+class KeywordRequest(BaseModel):
+    topic: str
+
+# Datos ejemplo - valores de volumen de búsqueda de Google Trends y Semrush
+trends_volumes = np.array([14800, 12580, 11248, 9472, 9176, 8880, 7696, 6512, 6364, 6216, 5772, 4884, 4144, 3848, 3700, 3552, 3404, 2812, 2812, 2664, 2516, 2368, 2368]).reshape(-1, 1)
+semrush_volumes = np.array([3600, 320, 4400, 320, 480, 590, 50, 390, 590, 390, 320, 260, 1600, 210, 170, 880, 720, 110, 90, 210, 170, 140, 170])
+
+# Inicializar y ajustar un modelo de regresión polinomial
+poly = PolynomialFeatures(degree=2)
+trends_poly = poly.fit_transform(trends_volumes)
+model = LinearRegression()
+model.fit(trends_poly, semrush_volumes)
+
+def adjust_volume(trends_volume):
+    """ Ajusta el volumen basado en el modelo de regresión polinomial """
+    trends_volume_transformed = poly.transform(np.array([[trends_volume]]))
+    return model.predict(trends_volume_transformed)[0]
+
 # Configuración inicial de pytrends
 pytrends = TrendReq(hl='es-ES', tz=360)
 
@@ -462,26 +451,44 @@ async def fetch_google_search_results(topic, max_attempts=5):
             if attempts == max_attempts:
                 raise HTTPException(status_code=429, detail="Google Trends rate limit exceeded")
 
-def process_related_queries(related_queries, topic):
-    keywords = []
-    max_reference_volume = 100  # Ejemplo de volumen de referencia máximo
-    scaling_factor = 14800 / max_reference_volume
-    excluded_words = ['la', 'el', 'los', 'las']
-
-    if topic in related_queries:
-        related_data = related_queries[topic]['top']
-        for query in related_data.to_dict('records'):
-            if not any(excluded_word in query['query'].split() for excluded_word in excluded_words):
-                scaled_volume = int(query['value'] * scaling_factor)
-                keywords.append({"keyword": query['query'], "volume": scaled_volume})
-    return keywords
-
 @app.post("/search_keywords")
 async def search_keywords(request: KeywordRequest):
     google_results = await fetch_google_search_results(request.topic)
     if not google_results:
         raise HTTPException(status_code=404, detail="No keywords found")
     return {"keywords": google_results}
+
+def process_related_queries(related_queries, topic):
+    keywords = []
+    scaling_factor = 14800 / 100  # Suponiendo que 100 es el máximo de Trends para 'Digital Marketing'
+    excluded_words = ['la', 'el', 'los', 'las']
+
+    if topic in related_queries:
+        related_data = related_queries[topic]
+        for data_type in ['top', 'rising']:
+            if related_data.get(data_type) is not None:
+                for query in related_data[data_type].to_dict('records'):
+                    if not any(excluded_word in query['query'].split() for excluded_word in excluded_words):
+                        trends_volume = query['value'] * scaling_factor
+                        scaled_volume = adjust_volume(trends_volume)
+                        keywords.append({"keyword": query['query'], "volume": scaled_volume})
+    return keywords
+
+
+##########################################
+
+
+############ ANALYZE_ROBOTS ##############
+
+
+@app.post("/analyze-robots")
+async def analyze_robots_endpoint(request: RobotsTxtRequest):
+    """Endpoint para obtener y analizar el archivo robots.txt de un dominio dado."""
+    robots_txt_content = await fetch_robots_txt(request.url)
+    analysis_results = analyze_robots_txt(robots_txt_content)
+    if not analysis_results:
+        raise HTTPException(status_code=404, detail="No actionable rules found in robots.txt")
+    return {"domain": request.url, "analysis": analysis_results}
 
 
 ##########################################

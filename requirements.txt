@@ -41,4 +41,5 @@ utils==1.0.2
 uvicorn==0.18.2
 xmltodict==0.13.0
 yarl==1.9.4
-pytrends>=4.8.0
+pytrends==4.9.2
+scikit-learn==1.4.2
