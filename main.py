@@ -38,6 +38,7 @@ app = FastAPI(title="ErnieRank API")
 async def startup_event():
     app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
     if not app.state.openai_api_key:
+        print("OPENAI_API_KEY environment variable not set. Set this variable and restart the application.")
         raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
     app.state.client = httpx.AsyncClient()
 
