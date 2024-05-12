@@ -27,10 +27,12 @@ import time
 import requests
 import logging
 from starlette.middleware.gzip import GZipMiddleware
+import pytrends
 from pytrends.request import TrendReq
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 import numpy as np
+import sys
 
 app = FastAPI(title="ErnieRank API")
 
@@ -38,8 +40,11 @@ app = FastAPI(title="ErnieRank API")
 async def startup_event():
     app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
     if not app.state.openai_api_key:
-        print("OPENAI_API_KEY environment variable not set. Set this variable and restart the application.")
+        logger.critical("OPENAI_API_KEY environment variable not set. Set this variable and restart the application.")
+        print("Failed to detect OPENAI_API_KEY:", app.state.openai_api_key, file=sys.stderr)
         raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
+    else:
+        print("OPENAI_API_KEY detected successfully:", app.state.openai_api_key, file=sys.stderr)
     app.state.client = httpx.AsyncClient()
 
 @app.on_event("shutdown")
@@ -102,35 +107,60 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(client, url):
+async def fetch_sitemap(client, base_url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+        "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
+    }
+    # Asegurarse de que la base URL es correcta, eliminando cualquier ruta adicional incorrectamente añadida
+    base_url = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
+
+    sitemap_paths = ['/sitemap_index.xml', '/sitemap.xml', '/sitemap1.xml']  # Diferentes endpoints de sitemap comunes
+    all_urls = []
+
+    for path in sitemap_paths:
+        url = f"{base_url.rstrip('/')}{path}"
+        try:
+            response = await client.get(url, headers=headers)
+            if response.status_code == 404:
+                continue  # Si no se encuentra el sitemap en esta ruta, intenta con la siguiente
+            response.raise_for_status()
+            sitemap_contents = xmltodict.parse(response.content)
+
+            # Procesando sitemap index
+            if 'sitemapindex' in sitemap_contents:
+                sitemap_indices = sitemap_contents['sitemapindex'].get('sitemap', [])
+                sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
+                for sitemap in sitemap_indices:
+                    sitemap_url = sitemap['loc']
+                    all_urls.extend(await fetch_individual_sitemap(client, sitemap_url))
+            # Procesando urlset directamente si está presente
+            elif 'urlset' in sitemap_contents:
+                all_urls.extend([url['loc'] for url in sitemap_contents['urlset']['url']])
+        except Exception as e:
+            print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
+
+    if not all_urls:
+        print("No sitemaps found at any known locations.")
+        return None
+    return all_urls
+
+async def fetch_individual_sitemap(client, sitemap_url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
     }
     try:
-        response = await client.get(url, headers=headers)
+        response = await client.get(sitemap_url, headers=headers)
         response.raise_for_status()
         sitemap_contents = xmltodict.parse(response.content)
-        all_urls = []
-
-        if 'sitemapindex' in sitemap_contents:
-            sitemap_indices = sitemap_contents['sitemapindex']['sitemap']
-            sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
-            for sitemap in sitemap_indices:
-                sitemap_url = sitemap['loc']
-                sitemap_resp = await client.get(sitemap_url, headers=headers)
-                sitemap_resp.raise_for_status()
-                individual_sitemap = xmltodict.parse(sitemap_resp.content)
-                urls = [url['loc'] for url in individual_sitemap['urlset']['url']]
-                all_urls.extend(urls)
-        elif 'urlset' in sitemap_contents:
-            all_urls = [url['loc'] for url in sitemap_contents['urlset']['url']]
-
-        print(f"Fetched {len(all_urls)} URLs from the sitemap at {url}.")
-        return all_urls
+        if 'urlset' in sitemap_contents:
+            return [url['loc'] for url in sitemap_contents['urlset']['url']]
     except Exception as e:
-        print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
-        return None
+        print(f"Error fetching or parsing individual sitemap from {sitemap_url}: {str(e)}")
+        return []
+
+    return []
 
 ############################################
 
