@@ -86,11 +86,16 @@ async def process_urls_in_batches(request: BatchRequest):
 
     extended_results = []
     for result in results:
-        if result:
+        if result is not None:
             extended_result = await extract_additional_seo_data(url=result['url'], client=app.state.client)
-            extended_results.append({**result, **extended_result})
+            if extended_result is not None:
+                extended_results.append({**result, **extended_result})
+            else:
+                print(f"No extended data fetched for URL: {result['url']}")
+        else:
+            print("Analysis for a URL failed or returned no data.")
 
-    # Filtrado de resultados validos
+    # Filtrado de resultados válidos
     valid_results = [
         {
             "url": result['url'],
@@ -103,7 +108,7 @@ async def process_urls_in_batches(request: BatchRequest):
             "schema_data": result.get('schema_data', "No schema data available"),
             "image_alt_tags": result.get('image_alt_tags', []),
             "error_404": result.get('error_404', False)
-        } for result in extended_results if result
+        } for result in extended_results if result  # Asegurar que los resultados sean no-Nulos
     ]
 
     print(f"Filtered results: {valid_results}")
@@ -117,40 +122,31 @@ async def process_urls_in_batches(request: BatchRequest):
         "more_batches": more_batches,
         "next_batch_start": next_start if more_batches else None
     }
+    
+async def extract_additional_seo_data(url, client):
+    try:
+        response = await client.get(url)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, 'html.parser')
+            # Asumiendo que tenemos selectores específicos para extraer datos como títulos, descripciones, etc.
+            title = soup.find('title').text if soup.find('title') else 'No title found'
+            meta_description = soup.find('meta', attrs={'name': 'description'})
+            meta_description = meta_description['content'] if meta_description else 'No description found'
+            # Agregar más extracciones según necesario
+            data = {
+                'url': url,
+                'title': title,
+                'meta_description': meta_description,
+                # Otros campos...
+            }
+            return data
+        else:
+            print(f"Failed to fetch URL {url} with status code: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"An error occurred while fetching URL {url}: {str(e)}")
+        return None
 
-async def extract_additional_seo_data(url: str, client: httpx.AsyncClient) -> dict:
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"}
-    response = await client.get(url, headers=headers)
-    soup = BeautifulSoup(response.content, 'html.parser')
-    
-    canonical_link = soup.find("link", rel="canonical")
-    canonical = canonical_link['href'] if canonical_link else "Not available"
-
-    schema_data = {}
-    scripts = soup.find_all("script", type="application/ld+json")
-    for script in scripts:
-        try:
-            data = json.loads(script.string)
-            # Comprobar si data es una lista y procesar cada objeto JSON dentro de ella
-            if isinstance(data, list):
-                for item in data:
-                    if '@type' in item:
-                        schema_data[item['@type']] = item
-            elif '@type' in data:
-                schema_data[data['@type']] = data
-        except json.JSONDecodeError:
-            continue
-    
-    img_tags = soup.find_all("img")
-    image_alt_tags = [img.get('alt', 'No alt attribute') for img in img_tags if not img.get('alt')]
-    
-    return {
-        "canonical": canonical,
-        "schema_data": json.dumps(schema_data, indent=4),
-        "image_alt_tags": image_alt_tags,
-        "error_404": response.status_code == 404
-    }
-    
 async def fetch_sitemap(client, base_url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
