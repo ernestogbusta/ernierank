@@ -84,7 +84,13 @@ async def process_urls_in_batches(request: BatchRequest):
     results = await asyncio.gather(*tasks)
     print(f"Results received: {results}")
 
-    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
+    extended_results = []
+    for result in results:
+        if result:
+            extended_result = await extract_additional_seo_data(url=result['url'], client=app.state.client)
+            extended_results.append({**result, **extended_result})
+
+    # Filtrado de resultados validos
     valid_results = [
         {
             "url": result['url'],
@@ -92,9 +98,14 @@ async def process_urls_in_batches(request: BatchRequest):
             "meta_description": result.get('meta_description', "No description provided"),
             "main_keyword": result.get('main_keyword', "Not specified"),
             "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        } for result in results if result
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified"),
+            "canonical": result.get('canonical', "Not available"),
+            "schema_data": result.get('schema_data', "No schema data available"),
+            "image_alt_tags": result.get('image_alt_tags', []),
+            "error_404": result.get('error_404', False)
+        } for result in extended_results if result
     ]
+
     print(f"Filtered results: {valid_results}")
 
     next_start = request.start + len(urls_to_process)
@@ -107,6 +118,39 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
+async def extract_additional_seo_data(url: str, client: httpx.AsyncClient) -> dict:
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"}
+    response = await client.get(url, headers=headers)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    
+    canonical_link = soup.find("link", rel="canonical")
+    canonical = canonical_link['href'] if canonical_link else "Not available"
+
+    schema_data = {}
+    scripts = soup.find_all("script", type="application/ld+json")
+    for script in scripts:
+        try:
+            data = json.loads(script.string)
+            # Comprobar si data es una lista y procesar cada objeto JSON dentro de ella
+            if isinstance(data, list):
+                for item in data:
+                    if '@type' in item:
+                        schema_data[item['@type']] = item
+            elif '@type' in data:
+                schema_data[data['@type']] = data
+        except json.JSONDecodeError:
+            continue
+    
+    img_tags = soup.find_all("img")
+    image_alt_tags = [img.get('alt', 'No alt attribute') for img in img_tags if not img.get('alt')]
+    
+    return {
+        "canonical": canonical,
+        "schema_data": json.dumps(schema_data, indent=4),
+        "image_alt_tags": image_alt_tags,
+        "error_404": response.status_code == 404
+    }
+    
 async def fetch_sitemap(client, base_url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
