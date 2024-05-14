@@ -117,13 +117,9 @@ async def extract_additional_seo_data(url, client):
             canonical_link = soup.find('link', rel='canonical')
             canonical = canonical_link['href'] if canonical_link else 'Not available'
 
-            images = soup.find_all('img')
-            image_alt_tags = [img['alt'] for img in images if 'alt' in img.attrs]
-
             data = {
                 'url': url,
-                'canonical': canonical,
-                'image_alt_tags': image_alt_tags
+                'canonical': canonical
             }
             return data
         else:
@@ -132,6 +128,7 @@ async def extract_additional_seo_data(url, client):
     except Exception as e:
         print(f"An error occurred while fetching URL {url}: {str(e)}")
         return None
+
 
 
 async def fetch_sitemap(client, base_url):
