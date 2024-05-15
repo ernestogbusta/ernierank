@@ -68,14 +68,17 @@ class BatchRequest(BaseModel):
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
-    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
+    # Corrigiendo la URL para asegurar que siempre sea HTTPS
+    base_url = f"https://{urlparse(request.domain).netloc}"
+    sitemap_url = f"{base_url}/sitemap_index.xml"
     print(f"Fetching URLs from: {sitemap_url}")
-    urls = await fetch_sitemap(app.state.client, sitemap_url)
+
+    urls = await fetch_sitemap(app.state.client, base_url)
 
     if not urls:
-        print("No URLs found in the sitemap.")
+        print("No sitemap XML found at any known locations.")
         raise HTTPException(status_code=404, detail="Sitemap not found or empty")
-    
+
     print(f"Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
     print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
@@ -84,52 +87,26 @@ async def process_urls_in_batches(request: BatchRequest):
     results = await asyncio.gather(*tasks)
     print(f"Results received: {results}")
 
+    # Añadir aviso si la URL no usa HTTPS
     extended_results = []
     for result in results:
         if result is not None:
-            extended_result = await extract_additional_seo_data(url=result['url'], client=app.state.client)
-            if extended_result is not None:
-                extended_results.append({**result, **extended_result})
-            else:
-                print(f"No extended data fetched for URL: {result['url']}")
+            result['https_warning'] = "URL is not using HTTPS." if not result['url'].startswith("https://") else ""
+            extended_results.append(result)
         else:
             print("Analysis for a URL failed or returned no data.")
 
-    valid_results = [result for result in extended_results if result]
-
-    print(f"Filtered results: {valid_results}")
+    print(f"Filtered results: {extended_results}")
 
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
     print(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
-        "processed_urls": valid_results,
+        "processed_urls": extended_results,
         "more_batches": more_batches,
         "next_batch_start": next_start if more_batches else None
     }
-
-async def extract_additional_seo_data(url, client):
-    try:
-        response = await client.get(url)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            canonical_link = soup.find('link', rel='canonical')
-            canonical = canonical_link['href'] if canonical_link else 'Not available'
-
-            data = {
-                'url': url,
-                'canonical': canonical
-            }
-            return data
-        else:
-            print(f"Failed to fetch URL {url} with status code: {response.status_code}")
-            return None
-    except Exception as e:
-        print(f"An error occurred while fetching URL {url}: {str(e)}")
-        return None
-
-
 
 async def fetch_sitemap(client, base_url):
     headers = {
