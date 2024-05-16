@@ -63,7 +63,7 @@ def read_root():
 
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int = 600  # valor por defecto
+    batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 @app.post("/process_urls_in_batches")
