@@ -68,17 +68,14 @@ class BatchRequest(BaseModel):
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
-    # Corrigiendo la URL para asegurar que siempre sea HTTPS
-    base_url = f"https://{urlparse(request.domain).netloc}"
-    sitemap_url = f"{base_url}/sitemap_index.xml"
+    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
     print(f"Fetching URLs from: {sitemap_url}")
-
-    urls = await fetch_sitemap(app.state.client, base_url)
+    urls = await fetch_sitemap(app.state.client, sitemap_url)
 
     if not urls:
-        print("No sitemap XML found at any known locations.")
+        print("No URLs found in the sitemap.")
         raise HTTPException(status_code=404, detail="Sitemap not found or empty")
-
+    
     print(f"Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
     print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
@@ -87,23 +84,25 @@ async def process_urls_in_batches(request: BatchRequest):
     results = await asyncio.gather(*tasks)
     print(f"Results received: {results}")
 
-    # Añadir aviso si la URL no usa HTTPS
-    extended_results = []
-    for result in results:
-        if result is not None:
-            result['https_warning'] = "URL is not using HTTPS." if not result['url'].startswith("https://") else ""
-            extended_results.append(result)
-        else:
-            print("Analysis for a URL failed or returned no data.")
-
-    print(f"Filtered results: {extended_results}")
+    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
+    valid_results = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "meta_description": result.get('meta_description', "No description provided"),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "secondary_keywords": result.get('secondary_keywords', []),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+        } for result in results if result
+    ]
+    print(f"Filtered results: {valid_results}")
 
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
     print(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
-        "processed_urls": extended_results,
+        "processed_urls": valid_results,
         "more_batches": more_batches,
         "next_batch_start": next_start if more_batches else None
     }
