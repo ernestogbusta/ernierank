@@ -63,7 +63,7 @@ def read_root():
 
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int = 100  # valor por defecto
+    batch_size: int = 50  # Reducido a 50 para manejar mejor el tamaño de la respuesta
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
     auto_process_all: bool = True  # Nuevo parámetro para indicar procesamiento automático
 
@@ -90,7 +90,6 @@ async def process_urls_in_batches(request: BatchRequest):
         results = await asyncio.gather(*tasks)
         print(f"Results received: {results}")
 
-        # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
         valid_results = [
             {
                 "url": result['url'],
@@ -105,6 +104,18 @@ async def process_urls_in_batches(request: BatchRequest):
 
         all_results.extend(valid_results)
         start_index += len(urls_to_process)
+
+        # Return batch results to avoid response size issues
+        if len(all_results) >= request.batch_size:
+            next_start = start_index if start_index < len(urls) else None
+            more_batches = next_start is not None
+            response = {
+                "processed_urls": all_results,
+                "more_batches": more_batches,
+                "next_batch_start": next_start
+            }
+            all_results = []  # Reset results for next batch
+            return response
 
         if not request.auto_process_all:
             break
