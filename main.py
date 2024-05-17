@@ -65,6 +65,7 @@ class BatchRequest(BaseModel):
     domain: str
     batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
+    auto_process_all: bool = True  # Nuevo parámetro para indicar procesamiento automático
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
@@ -77,34 +78,45 @@ async def process_urls_in_batches(request: BatchRequest):
         raise HTTPException(status_code=404, detail="Sitemap not found or empty")
     
     print(f"Total URLs fetched for processing: {len(urls)}")
-    urls_to_process = urls[request.start:request.start + request.batch_size]
-    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
-    tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-    print(f"Results received: {results}")
+    all_results = []
+    start_index = request.start
 
-    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
-    valid_results = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "meta_description": result.get('meta_description', "No description provided"),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        } for result in results if result
-    ]
-    print(f"Filtered results: {valid_results}")
+    while start_index < len(urls):
+        urls_to_process = urls[start_index:start_index + request.batch_size]
+        print(f"Processing URLs from index {start_index} to {start_index + request.batch_size}: {urls_to_process}")
 
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
+        tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
+        results = await asyncio.gather(*tasks)
+        print(f"Results received: {results}")
+
+        # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
+        valid_results = [
+            {
+                "url": result['url'],
+                "title": result.get('title', "No title provided"),
+                "meta_description": result.get('meta_description', "No description provided"),
+                "main_keyword": result.get('main_keyword', "Not specified"),
+                "secondary_keywords": result.get('secondary_keywords', []),
+                "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+            } for result in results if result
+        ]
+        print(f"Filtered results: {valid_results}")
+
+        all_results.extend(valid_results)
+        start_index += len(urls_to_process)
+
+        if not request.auto_process_all:
+            break
+
+    more_batches = start_index < len(urls)
+    next_start = start_index if more_batches else None
     print(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
-        "processed_urls": valid_results,
+        "processed_urls": all_results,
         "more_batches": more_batches,
-        "next_batch_start": next_start if more_batches else None
+        "next_batch_start": next_start
     }
 
 async def fetch_sitemap(client, base_url):
