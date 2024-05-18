@@ -4,7 +4,7 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
-from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
+from analyze_thin_content import analyze_thin_content, ThinContentRequest, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
 from generate_content import generate_seo_content, process_new_data
 from analyze_404 import fetch_urls, check_url, crawl_site, find_broken_links
 from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
@@ -314,8 +314,6 @@ async def generate_content_endpoint(request: Request):
 
 ########### ANALYZE_THIN_CONTENT ##########
 
-# Configurando el logger
-
 class PageData(BaseModel):
     url: HttpUrl
     title: str
@@ -336,17 +334,6 @@ class PageData(BaseModel):
     def ensure_list(cls, v):
         if v is None:
             return []
-        return v
-
-class ThinContentRequest(BaseModel):
-    processed_urls: List[PageData]
-    more_batches: bool = False
-    next_batch_start: Optional[int] = None
-
-    @validator('processed_urls', each_item=True)
-    def check_urls(cls, v):
-        if not v.title or not v.url:
-            raise ValueError("URL and title must be provided for each item.")
         return v
 
 @app.post("/analyze_thin_content")
