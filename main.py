@@ -4,7 +4,7 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
-from analyze_thin_content import analyze_thin_content, ThinContentRequest, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
+from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
 from generate_content import generate_seo_content, process_new_data
 from analyze_404 import fetch_urls, check_url, crawl_site, find_broken_links
 from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
@@ -63,9 +63,8 @@ def read_root():
 
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int = 50  # Reducido a 50 para manejar mejor el tamaño de la respuesta
+    batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
-    auto_process_all: bool = True  # Nuevo parámetro para indicar procesamiento automático
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
@@ -78,56 +77,34 @@ async def process_urls_in_batches(request: BatchRequest):
         raise HTTPException(status_code=404, detail="Sitemap not found or empty")
     
     print(f"Total URLs fetched for processing: {len(urls)}")
+    urls_to_process = urls[request.start:request.start + request.batch_size]
+    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
-    all_results = []
-    start_index = request.start
+    tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
+    print(f"Results received: {results}")
 
-    while start_index < len(urls):
-        urls_to_process = urls[start_index:start_index + request.batch_size]
-        print(f"Processing URLs from index {start_index} to {start_index + request.batch_size}: {urls_to_process}")
+    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
+    valid_results = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "meta_description": result.get('meta_description', "No description provided"),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "secondary_keywords": result.get('secondary_keywords', []),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+        } for result in results if result
+    ]
+    print(f"Filtered results: {valid_results}")
 
-        tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
-        results = await asyncio.gather(*tasks)
-        print(f"Results received: {results}")
-
-        valid_results = [
-            {
-                "url": result['url'],
-                "title": result.get('title', "No title provided"),
-                "meta_description": result.get('meta_description', "No description provided"),
-                "main_keyword": result.get('main_keyword', "Not specified"),
-                "secondary_keywords": result.get('secondary_keywords', []),
-                "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-            } for result in results if result
-        ]
-        print(f"Filtered results: {valid_results}")
-
-        all_results.extend(valid_results)
-        start_index += len(urls_to_process)
-
-        # Return batch results to avoid response size issues
-        if len(all_results) >= request.batch_size:
-            next_start = start_index if start_index < len(urls) else None
-            more_batches = next_start is not None
-            response = {
-                "processed_urls": all_results,
-                "more_batches": more_batches,
-                "next_batch_start": next_start
-            }
-            all_results = []  # Reset results for next batch
-            return response
-
-        if not request.auto_process_all:
-            break
-
-    more_batches = start_index < len(urls)
-    next_start = start_index if more_batches else None
+    next_start = request.start + len(urls_to_process)
+    more_batches = next_start < len(urls)
     print(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
-        "processed_urls": all_results,
+        "processed_urls": valid_results,
         "more_batches": more_batches,
-        "next_batch_start": next_start
+        "next_batch_start": next_start if more_batches else None
     }
 
 async def fetch_sitemap(client, base_url):
@@ -314,6 +291,8 @@ async def generate_content_endpoint(request: Request):
 
 ########### ANALYZE_THIN_CONTENT ##########
 
+# Configurando el logger
+
 class PageData(BaseModel):
     url: HttpUrl
     title: str
@@ -334,6 +313,17 @@ class PageData(BaseModel):
     def ensure_list(cls, v):
         if v is None:
             return []
+        return v
+
+class ThinContentRequest(BaseModel):
+    processed_urls: List[PageData]
+    more_batches: bool = False
+    next_batch_start: Optional[int] = None
+
+    @validator('processed_urls', each_item=True)
+    def check_urls(cls, v):
+        if not v.title or not v.url:
+            raise ValueError("URL and title must be provided for each item.")
         return v
 
 @app.post("/analyze_thin_content")
