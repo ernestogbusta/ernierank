@@ -1,14 +1,12 @@
 import re
 import urllib.parse
 import asyncio
-from fastapi import HTTPException, Response
+from fastapi import HTTPException
 from pydantic import BaseModel, HttpUrl, validator
 from typing import List, Optional, Tuple
 import logging
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-
-
 
 class PageData(BaseModel):
     url: HttpUrl
@@ -46,33 +44,6 @@ class ThinContentRequest(BaseModel):
             raise ValueError("URL and title must be provided for each item.")
         return v
 
-async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentRequest:
-    logging.debug(f"Iniciando la obtención de datos procesados para el dominio: {domain}")
-    processed_data = ThinContentRequest(processed_urls=[
-        PageData(
-            url='http://example.com/page1',
-            title='Example Short Title',
-            meta_description='Description is too short.',
-            h1='Example H1 Heading',
-            h2=['Example H2 Heading', 'Another H2 Heading'],
-            main_keyword='example',
-            secondary_keywords=['example2', 'example3'],
-            semantic_search_intent='example intent'
-        ),
-        PageData(
-            url='http://example.com/page2',
-            title='Second Example Title',
-            meta_description='Another short description.',
-            h1='Second H1 Heading',
-            h2=['Second Example H2 Heading'],
-            main_keyword='second example',
-            secondary_keywords=['second example2', 'second example3'],
-            semantic_search_intent='second intent'
-        )
-    ])
-    logging.debug(f"Datos procesados obtenidos para {domain}: {processed_data}")
-    return processed_data
-
 # Asumamos que hemos revisado y confirmado que el max_score es adecuado:
 max_score = 1.0  # Puedes ajustar este valor según el máximo real derivado de tu análisis de componentes.
 
@@ -89,7 +60,6 @@ def classify_content_level(normalized_score: float) -> str:
         return "low"
     logging.debug("Contenido clasificado como 'none'")
     return "none"
-
 
 # Precompile regular expressions for efficiency
 hyphen_space_pattern = re.compile(r'-')
