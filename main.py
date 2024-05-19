@@ -361,36 +361,6 @@ async def analyze_thin_content_endpoint(request: Request):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-def tarea_demorada(nombre: str):
-    time.sleep(10)  # Simula un proceso que tarda 10 segundos
-
-@app.post("/start-delayed-task/")
-async def start_delayed_task(nombre: str, background_tasks: BackgroundTasks):
-    background_tasks.add_task(tarea_demorada, nombre=nombre)
-    return {"message": "Tarea demorada iniciada en segundo plano"}
-
-def analyze_content_in_background(request: ThinContentRequest):
-    for page in request.processed_urls:
-        logging.debug(f"Analizando en segundo plano {page.url}")
-    logging.debug("Análisis de contenido delgado en segundo plano completado")
-
-async def analyze_thin_content_directly(request: ThinContentRequest):
-    if not request.processed_urls:
-        raise HTTPException(status_code=400, detail="No URLs provided")
-    results = []
-    for page in request.processed_urls:
-        try:
-            score, level, details = await calculate_thin_content_score_and_details(page)
-            results.append({
-                "url": page.url,
-                "score": score,
-                "level": level,
-                "details": details
-            })
-        except Exception as e:
-            continue
-    return {"message": "Análisis completado", "data": results}
-
 #######################################
 
 
