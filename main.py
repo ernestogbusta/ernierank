@@ -62,14 +62,14 @@ def read_root():
 
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int = 100  # valor por defecto
-    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
+    batch_size: int = 100
+    start: int = 0
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
     print(f"Fetching URLs from: {sitemap_url}")
-    urls = await fetch_sitemap(app.state.client, sitemap_url)
+    urls = await fetch_sitemap(sitemap_url)
 
     if not urls:
         print("No URLs found in the sitemap.")
@@ -79,11 +79,10 @@ async def process_urls_in_batches(request: BatchRequest):
     urls_to_process = urls[request.start:request.start + request.batch_size]
     print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
-    tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
+    tasks = [analyze_url(url) for url in urls_to_process]
     results = await asyncio.gather(*tasks)
     print(f"Results received: {results}")
 
-    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
     valid_results = [
         {
             "url": result['url'],
@@ -106,34 +105,31 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(client, base_url):
+async def fetch_sitemap(base_url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
     }
-    # Asegurarse de que la base URL es correcta, eliminando cualquier ruta adicional incorrectamente añadida
     base_url = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
 
-    sitemap_paths = ['/sitemap_index.xml', '/sitemap.xml', '/sitemap1.xml']  # Diferentes endpoints de sitemap comunes
+    sitemap_paths = ['/sitemap_index.xml', '/sitemap.xml', '/sitemap1.xml']
     all_urls = []
 
     for path in sitemap_paths:
         url = f"{base_url.rstrip('/')}{path}"
         try:
-            response = await client.get(url, headers=headers)
+            response = requests.get(url, headers=headers)
             if response.status_code == 404:
-                continue  # Si no se encuentra el sitemap en esta ruta, intenta con la siguiente
+                continue
             response.raise_for_status()
             sitemap_contents = xmltodict.parse(response.content)
 
-            # Procesando sitemap index
             if 'sitemapindex' in sitemap_contents:
                 sitemap_indices = sitemap_contents['sitemapindex'].get('sitemap', [])
                 sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
                 for sitemap in sitemap_indices:
                     sitemap_url = sitemap['loc']
-                    all_urls.extend(await fetch_individual_sitemap(client, sitemap_url))
-            # Procesando urlset directamente si está presente
+                    all_urls.extend(fetch_individual_sitemap(sitemap_url))
             elif 'urlset' in sitemap_contents:
                 all_urls.extend([url['loc'] for url in sitemap_contents['urlset']['url']])
         except Exception as e:
@@ -144,13 +140,13 @@ async def fetch_sitemap(client, base_url):
         return None
     return all_urls
 
-async def fetch_individual_sitemap(client, sitemap_url):
+def fetch_individual_sitemap(sitemap_url):
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
     }
     try:
-        response = await client.get(sitemap_url, headers=headers)
+        response = requests.get(sitemap_url, headers=headers)
         response.raise_for_status()
         sitemap_contents = xmltodict.parse(response.content)
         if 'urlset' in sitemap_contents:
