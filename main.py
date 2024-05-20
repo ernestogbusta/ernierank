@@ -4,9 +4,8 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
-from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
+from analyze_thin_content import calculate_thin_content_score_and_details, classify_content_level
 from generate_content import generate_seo_content, process_new_data
-from analyze_404 import fetch_urls, check_url, crawl_site, find_broken_links
 from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
 from fastapi import FastAPI, HTTPException, Depends, Body, Request, BackgroundTasks, Response
 import httpx
@@ -291,7 +290,6 @@ async def generate_content_endpoint(request: Request):
 
 ########### ANALYZE_THIN_CONTENT ##########
 
-# Configurando el logger
 
 class PageData(BaseModel):
     url: HttpUrl
@@ -327,118 +325,27 @@ class ThinContentRequest(BaseModel):
         return v
 
 @app.post("/analyze_thin_content")
-async def analyze_thin_content_endpoint(request: Request):
-    try:
-        request_data = await request.json()
-
-        try:
-            thin_request = ThinContentRequest(**request_data)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
-
-        if not thin_request.processed_urls:
-            raise HTTPException(status_code=400, detail="No URLs provided")
-
-        analysis_results = await analyze_thin_content(thin_request)
-
-        formatted_response = {
-            "thin_content_pages": [
-                {
-                    "url": urllib.parse.urlparse(page["url"]).path,  # Devuelve solo la parte del path de la URL
-                    "level": page["level"],
-                    "description": page["details"]
-                }
-                for page in analysis_results["thin_content_pages"]
-            ]
-        }
-
-        return formatted_response
-
-    except HTTPException as http_exc:
-        # Log specific for HTTP errors that are raised deliberately
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-def tarea_demorada(nombre: str):
-    time.sleep(10)  # Simula un proceso que tarda 10 segundos
-
-@app.post("/start-delayed-task/")
-async def start_delayed_task(nombre: str, background_tasks: BackgroundTasks):
-    background_tasks.add_task(tarea_demorada, nombre=nombre)
-    return {"message": "Tarea demorada iniciada en segundo plano"}
-
-def analyze_content_in_background(request: ThinContentRequest):
-    for page in request.processed_urls:
-        logging.debug(f"Analizando en segundo plano {page.url}")
-    logging.debug("Análisis de contenido delgado en segundo plano completado")
-
-async def analyze_thin_content_directly(request: ThinContentRequest):
+async def analyze_thin_content_endpoint(request: ThinContentRequest):
     if not request.processed_urls:
-        raise HTTPException(status_code=400, detail="No URLs provided")
-    results = []
-    for page in request.processed_urls:
-        try:
-            score, level, details = await calculate_thin_content_score_and_details(page)
-            results.append({
-                "url": page.url,
-                "score": score,
-                "level": level,
-                "details": details
-            })
-        except Exception as e:
-            continue
-    return {"message": "Análisis completado", "data": results}
+        raise HTTPException(status_code=404, detail="No URL data available for analysis.")
+
+    tasks = [calculate_thin_content_score_and_details(page) for page in request.processed_urls]
+    results = await asyncio.gather(*tasks)
+
+    thin_content_pages = [
+        {
+            "url": urllib.parse.urlparse(page.url).path,
+            "level": classify_content_level(result[0]),
+            "description": result[1]
+        }
+        for page, result in zip(request.processed_urls, results) if classify_content_level(result[0]) != "none"
+    ]
+
+    return {"thin_content_pages": thin_content_pages} if thin_content_pages else {"message": "No thin content detected"}
+
 
 #######################################
 
-
-
-########### ANALYZE_404 ##########
-
-class DomainRequest(BaseModel):
-    domain: HttpUrl
-
-async def fetch_page(url: str, client: httpx.AsyncClient):
-    try:
-        response = await client.get(url)
-        if response.status_code == 404:
-            return None, 404
-        response.raise_for_status()
-        return response.text, response.status_code
-    except httpx.HTTPStatusError as e:
-        return None, e.response.status_code
-    except httpx.HTTPError:
-        return None, 500
-
-async def crawl_page(url: str, base_url: str, client: httpx.AsyncClient, visited: set):
-    if url in visited:
-        return []
-    visited.add(url)
-    content, status = await fetch_page(url, client)
-    results = [{"url": url, "status": status}]
-    if content is None:
-        return results
-
-    soup = BeautifulSoup(content, 'html.parser')
-    links = [link.get('href') for link in soup.find_all('a', href=True)]
-    internal_links = {urljoin(base_url, link) for link in links if link and (link.startswith('/') or base_url in link)}
-
-    tasks = [crawl_page(link, base_url, client, visited) for link in internal_links]
-    crawled_pages = await asyncio.gather(*tasks)
-    for page in crawled_pages:
-        results.extend(page)
-    return results
-
-@app.post("/check-domain/")
-async def check_domain(request: DomainRequest):
-    base_url = request.domain.rstrip('/')
-    visited = set()
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        results = await crawl_page(base_url, base_url, client, visited)
-        return results
-
-###################################
 
 
 ############ SEARCH_KEYWORDS #############
