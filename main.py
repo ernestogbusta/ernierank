@@ -138,10 +138,12 @@ async def fetch_sitemap(base_url: str) -> List[str]:
             except Exception as e:
                 print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
 
-    if not all_urls:
-        print("No sitemaps found at any known locations.")
+    # Filtrar y sanitizar URLs
+    sanitized_urls = [sanitize_url(url) for url in all_urls if is_valid_url(url)]
+    if not sanitized_urls:
+        print("No valid URLs found after sanitization.")
         return []
-    return all_urls
+    return sanitized_urls
 
 async def fetch_individual_sitemap(sitemap_url: str, client: httpx.AsyncClient) -> List[str]:
     headers = {
