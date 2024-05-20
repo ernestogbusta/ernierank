@@ -39,6 +39,7 @@ async def analyze_url(url: str, client: httpx.AsyncClient) -> dict:
         print(f"Error processing URL {url}: {e}")
         return None
 
+
 def calculate_semantic_search_intent(main_keyword, secondary_keywords):
     # Combine main and secondary keywords with given weights
     combined_keywords = [main_keyword] + secondary_keywords

@@ -79,8 +79,10 @@ async def process_urls_in_batches(request: BatchRequest):
     urls_to_process = urls[request.start:request.start + request.batch_size]
     print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
-    tasks = [analyze_url(url) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
+    async with httpx.AsyncClient() as client:
+        tasks = [analyze_url(url, client) for url in urls_to_process]
+        results = await asyncio.gather(*tasks)
+    
     print(f"Results received: {results}")
 
     valid_results = [
