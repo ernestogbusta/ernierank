@@ -81,7 +81,7 @@ async def process_urls_in_batches(request: BatchRequest):
 
     async with httpx.AsyncClient() as client:
         tasks = [analyze_url(url, client) for url in urls_to_process]
-        results = await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
     
     print(f"Results received: {results}")
 
@@ -93,7 +93,7 @@ async def process_urls_in_batches(request: BatchRequest):
             "main_keyword": result.get('main_keyword', "Not specified"),
             "secondary_keywords": result.get('secondary_keywords', []),
             "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        } for result in results if result
+        } for result in results if result and not isinstance(result, Exception)
     ]
     print(f"Filtered results: {valid_results}")
 
@@ -107,7 +107,7 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(base_url):
+async def fetch_sitemap(base_url: str) -> List[str]:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
@@ -117,40 +117,43 @@ async def fetch_sitemap(base_url):
     sitemap_paths = ['/sitemap_index.xml', '/sitemap.xml', '/sitemap1.xml']
     all_urls = []
 
-    for path in sitemap_paths:
-        url = f"{base_url.rstrip('/')}{path}"
-        try:
-            response = requests.get(url, headers=headers)
-            if response.status_code == 404:
-                continue
-            response.raise_for_status()
-            sitemap_contents = xmltodict.parse(response.content)
+    async with httpx.AsyncClient() as client:
+        for path in sitemap_paths:
+            url = f"{base_url.rstrip('/')}{path}"
+            try:
+                response = await client.get(url, headers=headers)
+                if response.status_code == 404:
+                    continue
+                response.raise_for_status()
+                sitemap_contents = xmltodict.parse(response.text)
 
-            if 'sitemapindex' in sitemap_contents:
-                sitemap_indices = sitemap_contents['sitemapindex'].get('sitemap', [])
-                sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
-                for sitemap in sitemap_indices:
-                    sitemap_url = sitemap['loc']
-                    all_urls.extend(fetch_individual_sitemap(sitemap_url))
-            elif 'urlset' in sitemap_contents:
-                all_urls.extend([url['loc'] for url in sitemap_contents['urlset']['url']])
-        except Exception as e:
-            print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
+                if 'sitemapindex' in sitemap_contents:
+                    sitemap_indices = sitemap_contents['sitemapindex'].get('sitemap', [])
+                    sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
+                    for sitemap in sitemap_indices:
+                        sitemap_url = sitemap['loc']
+                        all_urls.extend(await fetch_individual_sitemap(sitemap_url, client))
+                elif 'urlset' in sitemap_contents:
+                    all_urls.extend([url['loc'] for url in sitemap_contents['urlset']['url']])
+            except Exception as e:
+                print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
 
-    if not all_urls:
-        print("No sitemaps found at any known locations.")
-        return None
-    return all_urls
+    # Filtrar y sanitizar URLs
+    sanitized_urls = [sanitize_url(url) for url in all_urls if is_valid_url(url)]
+    if not sanitized_urls:
+        print("No valid URLs found after sanitization.")
+        return []
+    return sanitized_urls
 
-def fetch_individual_sitemap(sitemap_url):
+async def fetch_individual_sitemap(sitemap_url: str, client: httpx.AsyncClient) -> List[str]:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, como Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
     }
     try:
-        response = requests.get(sitemap_url, headers=headers)
+        response = await client.get(sitemap_url, headers=headers)
         response.raise_for_status()
-        sitemap_contents = xmltodict.parse(response.content)
+        sitemap_contents = xmltodict.parse(response.text)
         if 'urlset' in sitemap_contents:
             return [url['loc'] for url in sitemap_contents['urlset']['url']]
     except Exception as e:
@@ -158,6 +161,19 @@ def fetch_individual_sitemap(sitemap_url):
         return []
 
     return []
+
+def sanitize_url(url: str) -> str:
+    """
+    Sanitiza la URL removiendo caracteres no válidos al final de la misma.
+    """
+    return url.rstrip(':')
+
+def is_valid_url(url: str) -> bool:
+    """
+    Verifica si una URL es válida.
+    """
+    parsed_url = urlparse(url)
+    return parsed_url.scheme in ["http", "https"] and bool(parsed_url.netloc) and not url.endswith(':')
 
 ############################################
 
