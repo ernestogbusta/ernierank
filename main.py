@@ -329,17 +329,29 @@ async def analyze_thin_content_endpoint(request: ThinContentRequest):
     if not request.processed_urls:
         raise HTTPException(status_code=404, detail="No URL data available for analysis.")
 
-    tasks = [calculate_thin_content_score_and_details(page) for page in request.processed_urls]
-    results = await asyncio.gather(*tasks)
+    logging.debug("Inicio del análisis de contenido delgado")
+    
+    try:
+        tasks = [calculate_thin_content_score_and_details(page) for page in request.processed_urls]
+        results = await asyncio.gather(*tasks)
+    except Exception as e:
+        logging.error(f"Error durante el análisis de contenido delgado: {e}")
+        raise HTTPException(status_code=500, detail="Error processing thin content analysis")
 
-    thin_content_pages = [
-        {
-            "url": urllib.parse.urlparse(page.url).path,
-            "level": classify_content_level(result[0]),
-            "description": result[1]
-        }
-        for page, result in zip(request.processed_urls, results) if classify_content_level(result[0]) != "none"
-    ]
+    try:
+        thin_content_pages = [
+            {
+                "url": urllib.parse.urlparse(page.url).path,
+                "level": classify_content_level(result[0]),
+                "description": result[1]
+            }
+            for page, result in zip(request.processed_urls, results) if classify_content_level(result[0]) != "none"
+        ]
+    except Exception as e:
+        logging.error(f"Error durante la clasificación de contenido: {e}")
+        raise HTTPException(status_code=500, detail="Error classifying thin content levels")
+
+    logging.debug("Fin del análisis de contenido delgado")
 
     return {"thin_content_pages": thin_content_pages} if thin_content_pages else {"message": "No thin content detected"}
 
