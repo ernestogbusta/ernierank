@@ -341,6 +341,7 @@ class ThinContentRequest(BaseModel):
 @app.post("/analyze_thin_content/")
 async def analyze_thin_content_endpoint(request: ThinContentRequest):
     if not request.processed_urls:
+        logging.error("No URL data available for analysis.")
         raise HTTPException(status_code=404, detail="No URL data available for analysis.")
 
     logging.debug("Inicio del análisis de contenido delgado")
@@ -355,7 +356,7 @@ async def analyze_thin_content_endpoint(request: ThinContentRequest):
     try:
         thin_content_pages = [
             {
-                "url": page.url,
+                "url": urllib.parse.urlparse(page.url).path,
                 "level": classify_content_level(result[0]),
                 "description": result[1]
             }
@@ -375,7 +376,7 @@ async def analyze_domain(domain: str, batch_size: int = 10):
     all_thin_content_pages = []
 
     while True:
-        batch_request = URLBatchRequest(domain=domain, batch_size=batch_size, start_index=start_index)
+        batch_request = BatchRequest(domain=domain, start=start_index, batch_size=batch_size)
         batch_response = await process_urls_in_batches(batch_request)
 
         thin_content_request = ThinContentRequest(
@@ -395,7 +396,6 @@ async def analyze_domain(domain: str, batch_size: int = 10):
         start_index = batch_response["next_batch_start"]
 
     return {"thin_content_pages": all_thin_content_pages} if all_thin_content_pages else {"message": "No thin content detected"}
-
 
 #######################################
 
