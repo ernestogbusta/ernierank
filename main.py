@@ -109,6 +109,13 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
+def is_valid_url(url: str) -> bool:
+    """
+    Verifica si una URL es válida.
+    """
+    parsed_url = urlparse(url)
+    return parsed_url.scheme in ["http", "https"] and bool(parsed_url.netloc) and not url.endswith(':')
+
 async def fetch_sitemap(base_url: str) -> List[str]:
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, como Gecko) Chrome/58.0.3029.110 Safari/537.36",
