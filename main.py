@@ -338,7 +338,7 @@ class ThinContentRequest(BaseModel):
             raise ValueError("URL and title must be provided for each item.")
         return v
 
-@app.post("/analyze_thin_content")
+@app.post("/analyze_thin_content/")
 async def analyze_thin_content_endpoint(request: ThinContentRequest):
     if not request.processed_urls:
         raise HTTPException(status_code=404, detail="No URL data available for analysis.")
@@ -355,7 +355,7 @@ async def analyze_thin_content_endpoint(request: ThinContentRequest):
     try:
         thin_content_pages = [
             {
-                "url": urllib.parse.urlparse(page.url).path,
+                "url": page.url,
                 "level": classify_content_level(result[0]),
                 "description": result[1]
             }
@@ -368,6 +368,33 @@ async def analyze_thin_content_endpoint(request: ThinContentRequest):
     logging.debug("Fin del análisis de contenido delgado")
 
     return {"thin_content_pages": thin_content_pages} if thin_content_pages else {"message": "No thin content detected"}
+
+@app.post("/analyze_domain/")
+async def analyze_domain(domain: str, batch_size: int = 10):
+    start_index = 0
+    all_thin_content_pages = []
+
+    while True:
+        batch_request = URLBatchRequest(domain=domain, batch_size=batch_size, start_index=start_index)
+        batch_response = await process_urls_in_batches(batch_request)
+
+        thin_content_request = ThinContentRequest(
+            processed_urls=[PageData(**url) for url in batch_response["processed_urls"]],
+            more_batches=batch_response["more_batches"],
+            next_batch_start=batch_response["next_batch_start"]
+        )
+        
+        thin_content_response = await analyze_thin_content_endpoint(thin_content_request)
+        
+        if "thin_content_pages" in thin_content_response:
+            all_thin_content_pages.extend(thin_content_response["thin_content_pages"])
+
+        if not batch_response["more_batches"]:
+            break
+
+        start_index = batch_response["next_batch_start"]
+
+    return {"thin_content_pages": all_thin_content_pages} if all_thin_content_pages else {"message": "No thin content detected"}
 
 
 #######################################
