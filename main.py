@@ -109,44 +109,39 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(sitemap_url: str) -> List[str]:
-    try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(sitemap_url)
-            response.raise_for_status()
-            all_urls = parse_sitemap(response.text)
-            sanitized_urls = [sanitize_url(url) for url in all_urls if is_valid_url(url)]
-        return sanitized_urls
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=f"Error fetching sitemap: {exc.response.text}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
+async def fetch_sitemap(base_url: str) -> List[str]:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, como Gecko) Chrome/58.0.3029.110 Safari/537.36",
+        "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
+    }
+    base_url = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
 
-def is_valid_url(url: str) -> bool:
-    regex = re.compile(
-        r'^(?:http|ftp)s?://'  # http:// o https://
-        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+(?:[A-Z]{2,6}\.?|[A-Z0-9-]{2,}\.?)|'  # dominio...
-        r'localhost|'  # localhost...
-        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}|'  # ...o dirección IP
-        r'\[?[A-F0-9]*:[A-F0-9:]+\]?)'  # ...o dirección IPv6
-        r'(?::\d+)?'  # puerto opcional
-        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
-    return re.match(regex, url) is not None
+    sitemap_paths = ['/sitemap_index.xml', '/sitemap.xml', '/sitemap1.xml']
+    all_urls = []
 
-def sanitize_url(url: str) -> str:
-    # Si tienes alguna lógica específica de sanitización, agrégala aquí.
-    return url.strip()
+    async with httpx.AsyncClient() as client:
+        for path in sitemap_paths:
+            url = f"{base_url.rstrip('/')}{path}"
+            try:
+                response = await client.get(url, headers=headers, follow_redirects=True)
+                if response.status_code == 404:
+                    continue
+                response.raise_for_status()
+                sitemap_contents = xmltodict.parse(response.text)
 
-def parse_sitemap(xml_content: str) -> List[str]:
-    try:
-        root = ET.fromstring(xml_content)
-        urls = []
-        for url in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}loc'):
-            urls.append(url.text)
-        return urls
-    except ET.ParseError as e:
-        raise HTTPException(status_code=500, detail=f"Error parsing sitemap XML: {str(e)}")
+                if 'sitemapindex' in sitemap_contents:
+                    sitemap_indices = sitemap_contents['sitemapindex'].get('sitemap', [])
+                    sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
+                    for sitemap in sitemap_indices:
+                        sitemap_url = sitemap['loc']
+                        all_urls.extend(await fetch_individual_sitemap(sitemap_url, client))
+                elif 'urlset' in sitemap_contents:
+                    all_urls.extend([url['loc'] for url in sitemap_contents['urlset']['url']])
+            except Exception as e:
+                logging.error(f"Error fetching or parsing sitemap from {url}: {str(e)}")
 
+    sanitized_urls = [sanitize_url(url) for url in all_urls if is_valid_url(url)]
+    return sanitized_urls if sanitized_urls else []
 
 async def fetch_individual_sitemap(sitemap_url: str, client: httpx.AsyncClient) -> List[str]:
     headers = {
@@ -389,7 +384,6 @@ async def analyze_domain(domain: str, batch_size: int = 10):
         start_index = batch_response["next_batch_start"]
 
     return {"thin_content_pages": all_thin_content_pages} if all_thin_content_pages else {"message": "No thin content detected"}
-
 
 #######################################
 
