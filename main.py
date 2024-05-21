@@ -68,38 +68,40 @@ class BatchRequest(BaseModel):
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    print(f"Fetching URLs from: {sitemap_url}")
+    logging.info(f"Fetching URLs from: {sitemap_url}")
     urls = await fetch_sitemap(sitemap_url)
 
     if not urls:
-        print("No URLs found in the sitemap.")
+        logging.warning("No URLs found in the sitemap.")
         raise HTTPException(status_code=404, detail="Sitemap not found or empty")
     
-    print(f"Total URLs fetched for processing: {len(urls)}")
+    logging.info(f"Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
-    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
+    logging.info(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
     async with httpx.AsyncClient() as client:
         tasks = [analyze_url(url, client) for url in urls_to_process]
         results = await asyncio.gather(*tasks, return_exceptions=True)
     
-    print(f"Results received: {results}")
+    logging.info(f"Results received: {results}")
 
-    valid_results = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "meta_description": result.get('meta_description', "No description provided"),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        } for result in results if result and not isinstance(result, Exception)
-    ]
-    print(f"Filtered results: {valid_results}")
+    valid_results = []
+    for result in results:
+        if result and not isinstance(result, Exception):
+            valid_results.append({
+                "url": result['url'],
+                "title": result.get('title', "No title provided"),
+                "meta_description": result.get('meta_description', "No description provided"),
+                "main_keyword": result.get('main_keyword', "Not specified"),
+                "secondary_keywords": result.get('secondary_keywords', []),
+                "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+            })
+
+    logging.info(f"Filtered results: {valid_results}")
 
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
-    print(f"More batches: {more_batches}, Next batch start index: {next_start}")
+    logging.info(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
         "processed_urls": valid_results,
@@ -121,7 +123,7 @@ async def fetch_sitemap(base_url: str) -> List[str]:
         for path in sitemap_paths:
             url = f"{base_url.rstrip('/')}{path}"
             try:
-                response = await client.get(url, headers=headers)
+                response = await client.get(url, headers=headers, follow_redirects=True)
                 if response.status_code == 404:
                     continue
                 response.raise_for_status()
@@ -136,7 +138,7 @@ async def fetch_sitemap(base_url: str) -> List[str]:
                 elif 'urlset' in sitemap_contents:
                     all_urls.extend([url['loc'] for url in sitemap_contents['urlset']['url']])
             except Exception as e:
-                print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
+                logging.error(f"Error fetching or parsing sitemap from {url}: {str(e)}")
 
     sanitized_urls = [sanitize_url(url) for url in all_urls if is_valid_url(url)]
     return sanitized_urls if sanitized_urls else []
@@ -147,29 +149,16 @@ async def fetch_individual_sitemap(sitemap_url: str, client: httpx.AsyncClient) 
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
     }
     try:
-        response = await client.get(sitemap_url, headers=headers)
+        response = await client.get(sitemap_url, headers=headers, follow_redirects=True)
         response.raise_for_status()
         sitemap_contents = xmltodict.parse(response.text)
         if 'urlset' in sitemap_contents:
             return [url['loc'] for url in sitemap_contents['urlset']['url']]
     except Exception as e:
-        print(f"Error fetching or parsing individual sitemap from {sitemap_url}: {str(e)}")
+        logging.error(f"Error fetching or parsing individual sitemap from {sitemap_url}: {str(e)}")
         return []
 
     return []
-
-def sanitize_url(url: str) -> str:
-    """
-    Sanitiza la URL removiendo caracteres no válidos al final de la misma.
-    """
-    return url.rstrip(':')
-
-def is_valid_url(url: str) -> bool:
-    """
-    Verifica si una URL es válida.
-    """
-    parsed_url = urlparse(url)
-    return parsed_url.scheme in ["http", "https"] and bool(parsed_url.netloc) and not url.endswith(':')
 
 ############################################
 
@@ -341,26 +330,29 @@ async def analyze_thin_content_endpoint(request: ThinContentRequest):
         raise HTTPException(status_code=404, detail="No URL data available for analysis.")
 
     logging.debug("Inicio del análisis de contenido delgado")
-    
+
+    tasks = []
+    for page in request.processed_urls:
+        tasks.append(calculate_thin_content_score_and_details(page))
+
     try:
-        tasks = [calculate_thin_content_score_and_details(page) for page in request.processed_urls]
         results = await asyncio.gather(*tasks)
     except Exception as e:
         logging.error(f"Error durante el análisis de contenido delgado: {e}")
         raise HTTPException(status_code=500, detail="Error processing thin content analysis")
 
-    try:
-        thin_content_pages = [
-            {
-                "url": urllib.parse.urlparse(page.url).path,
-                "level": classify_content_level(result[0]),
-                "description": result[1]
-            }
-            for page, result in zip(request.processed_urls, results) if classify_content_level(result[0]) != "none"
-        ]
-    except Exception as e:
-        logging.error(f"Error durante la clasificación de contenido: {e}")
-        raise HTTPException(status_code=500, detail="Error classifying thin content levels")
+    thin_content_pages = []
+    for page, result in zip(request.processed_urls, results):
+        try:
+            level = classify_content_level(result[0])
+            if level != "none":
+                thin_content_pages.append({
+                    "url": urllib.parse.urlparse(page.url).path,
+                    "level": level,
+                    "description": result[1]
+                })
+        except Exception as e:
+            logging.error(f"Error durante la clasificación de contenido: {e}")
 
     logging.debug("Fin del análisis de contenido delgado")
 
@@ -392,6 +384,7 @@ async def analyze_domain(domain: str, batch_size: int = 10):
         start_index = batch_response["next_batch_start"]
 
     return {"thin_content_pages": all_thin_content_pages} if all_thin_content_pages else {"message": "No thin content detected"}
+
 
 #######################################
 
