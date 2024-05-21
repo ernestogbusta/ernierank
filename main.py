@@ -109,7 +109,7 @@ async def process_urls_in_batches(request: BatchRequest):
 
 async def fetch_sitemap(base_url: str) -> List[str]:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, como Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
     }
     base_url = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
@@ -138,12 +138,8 @@ async def fetch_sitemap(base_url: str) -> List[str]:
             except Exception as e:
                 print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
 
-    # Filtrar y sanitizar URLs
     sanitized_urls = [sanitize_url(url) for url in all_urls if is_valid_url(url)]
-    if not sanitized_urls:
-        print("No valid URLs found after sanitization.")
-        return []
-    return sanitized_urls
+    return sanitized_urls if sanitized_urls else []
 
 async def fetch_individual_sitemap(sitemap_url: str, client: httpx.AsyncClient) -> List[str]:
     headers = {
