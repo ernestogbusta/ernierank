@@ -1,12 +1,14 @@
 import re
 import urllib.parse
 import asyncio
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from pydantic import BaseModel, HttpUrl, validator
 from typing import List, Optional, Tuple
 import logging
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
 
 class PageData(BaseModel):
     url: HttpUrl
@@ -44,6 +46,33 @@ class ThinContentRequest(BaseModel):
             raise ValueError("URL and title must be provided for each item.")
         return v
 
+async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentRequest:
+    logging.debug(f"Iniciando la obtención de datos procesados para el dominio: {domain}")
+    processed_data = ThinContentRequest(processed_urls=[
+        PageData(
+            url='http://example.com/page1',
+            title='Example Short Title',
+            meta_description='Description is too short.',
+            h1='Example H1 Heading',
+            h2=['Example H2 Heading', 'Another H2 Heading'],
+            main_keyword='example',
+            secondary_keywords=['example2', 'example3'],
+            semantic_search_intent='example intent'
+        ),
+        PageData(
+            url='http://example.com/page2',
+            title='Second Example Title',
+            meta_description='Another short description.',
+            h1='Second H1 Heading',
+            h2=['Second Example H2 Heading'],
+            main_keyword='second example',
+            secondary_keywords=['second example2', 'second example3'],
+            semantic_search_intent='second intent'
+        )
+    ])
+    logging.debug(f"Datos procesados obtenidos para {domain}: {processed_data}")
+    return processed_data
+
 # Asumamos que hemos revisado y confirmado que el max_score es adecuado:
 max_score = 1.0  # Puedes ajustar este valor según el máximo real derivado de tu análisis de componentes.
 
@@ -60,6 +89,7 @@ def classify_content_level(normalized_score: float) -> str:
         return "low"
     logging.debug("Contenido clasificado como 'none'")
     return "none"
+
 
 # Precompile regular expressions for efficiency
 hyphen_space_pattern = re.compile(r'-')
@@ -82,75 +112,71 @@ def keyword_in_text(keyword: str, text: str) -> bool:
     return keyword_words.issubset(text_words)
 
 async def calculate_thin_content_score_and_details(page: PageData, max_score: float = 1.0) -> Tuple[float, str]:
-    try:
-        score = 0
-        issues = []
-        total_possible_score = 6.35
+    score = 0
+    issues = []
+    total_possible_score = 6.35
 
-        title_normalized = clean_and_split(page.title if page.title else "")
-        meta_description_normalized = clean_and_split(page.meta_description if page.meta_description else "")
-        h1_normalized = clean_and_split(page.h1 if page.h1 else "")
-        keyword_normalized = clean_and_split(page.main_keyword)
-        slug_normalized = clean_and_split(urllib.parse.urlparse(page.url).path)
+    title_normalized = clean_and_split(page.title if page.title else "")
+    meta_description_normalized = clean_and_split(page.meta_description if page.meta_description else "")
+    h1_normalized = clean_and_split(page.h1 if page.h1 else "")
+    keyword_normalized = clean_and_split(page.main_keyword)
+    slug_normalized = clean_and_split(urllib.parse.urlparse(page.url).path)
 
-        logging.debug(f"Análisis de título: {title_normalized}, URL: {page.url}")
-        if not page.title:
-            issues.append(f"No hay title en {page.url}")
-            score += 1
-        elif len(page.title) < 10:
-            issues.append(f"Title muy corto en {page.url}")
-            score += 0.8
-        if not keyword_in_text(page.main_keyword, page.title):
-            issues.append(f"Keyword '{page.main_keyword}' no incluida en title en {page.url}")
-            score += 1
+    logging.debug(f"Análisis de título: {title_normalized}, URL: {page.url}")
+    if not page.title:
+        issues.append(f"No hay title en {page.url}")
+        score += 1
+    elif len(page.title) < 10:
+        issues.append(f"Title muy corto en {page.url}")
+        score += 0.8
+    if not keyword_in_text(page.main_keyword, page.title):
+        issues.append(f"Keyword '{page.main_keyword}' no incluida en title en {page.url}")
+        score += 1
 
-        logging.debug(f"Análisis de meta descripción: {meta_description_normalized}")
-        if not page.meta_description:
-            issues.append(f"No hay meta description en {page.url}")
-            score += 0.6
-        elif len(page.meta_description) < 50:
-            issues.append(f"Meta description muy pobre en {page.url}")
-            score += 0.5
-        if not keyword_in_text(page.main_keyword, page.meta_description):
-            issues.append(f"Keyword '{page.main_keyword}' no incluida en meta description en {page.url}")
-            score += 0.25
+    logging.debug(f"Análisis de meta descripción: {meta_description_normalized}")
+    if not page.meta_description:
+        issues.append(f"No hay meta description en {page.url}")
+        score += 0.6
+    elif len(page.meta_description) < 50:
+        issues.append(f"Meta description muy pobre en {page.url}")
+        score += 0.5
+    if not keyword_in_text(page.main_keyword, page.meta_description):
+        issues.append(f"Keyword '{page.main_keyword}' no incluida en meta description en {page.url}")
+        score += 0.25
 
-        logging.debug(f"Análisis de H1: {h1_normalized}")
-        if not page.h1:
-            issues.append(f"No hay H1 en {page.url}")
-            score += 1
-        elif len(page.h1) < 10:
-            issues.append(f"H1 muy corto en {page.url}")
-            score += 0.8
-        if not keyword_in_text(page.main_keyword, page.h1):
-            issues.append(f"Keyword '{page.main_keyword}' no incluida en H1 en {page.url}")
-            score += 0.9
+    logging.debug(f"Análisis de H1: {h1_normalized}")
+    if not page.h1:
+        issues.append(f"No hay H1 en {page.url}")
+        score += 1
+    elif len(page.h1) < 10:
+        issues.append(f"H1 muy corto en {page.url}")
+        score += 0.8
+    if not keyword_in_text(page.main_keyword, page.h1):
+        issues.append(f"Keyword '{page.main_keyword}' no incluida en H1 en {page.url}")
+        score += 0.9
 
-        logging.debug(f"Análisis de H2: {page.h2}")
-        if not page.h2:
-            issues.append(f"No hay H2 en {page.url}")
-            score += 0.7
-        else:
-            h2_issues = 0
-            for h2_text in page.h2:
-                h2_normalized = clean_and_split(h2_text)
-                if len(h2_text) < 10:
-                    h2_issues += 0.5
-                if not keyword_in_text(page.main_keyword, h2_text):
-                    h2_issues += 0.4
-            score += min(h2_issues, 0.7)
+    logging.debug(f"Análisis de H2: {page.h2}")
+    if not page.h2:
+        issues.append(f"No hay H2 en {page.url}")
+        score += 0.7
+    else:
+        h2_issues = 0
+        for h2_text in page.h2:
+            h2_normalized = clean_and_split(h2_text)
+            if len(h2_text) < 10:
+                h2_issues += 0.5
+            if not keyword_in_text(page.main_keyword, h2_text):
+                h2_issues += 0.4
+        score += min(h2_issues, 0.7)
 
-        logging.debug(f"Análisis de slug: {slug_normalized}")
-        if not keyword_in_text(page.main_keyword, urllib.parse.urlparse(page.url).path):
-            issues.append(f"El slug no incluye la keyword '{page.main_keyword}' en {page.url}")
-            score += 1
+    logging.debug(f"Análisis de slug: {slug_normalized}")
+    if not keyword_in_text(page.main_keyword, urllib.parse.urlparse(page.url).path):
+        issues.append(f"El slug no incluye la keyword '{page.main_keyword}' en {page.url}")
+        score += 1
 
-        normalized_score = score / total_possible_score if total_possible_score != 0 else 0
-        details = ', '.join(issues) if issues else 'Enhorabuena, no hay errores de thin content'
-        return normalized_score, details
-    except Exception as e:
-        logging.error(f"Error al calcular la puntuación y detalles de thin content: {e}")
-        return 0.0, "Error al calcular los detalles de thin content"
+    normalized_score = score / total_possible_score if total_possible_score != 0 else 0
+    details = ', '.join(issues) if issues else 'Enhorabuena, no hay errores de thin content'
+    return normalized_score, details
 
 async def analyze_thin_content(request: ThinContentRequest):
     if not request.processed_urls:
