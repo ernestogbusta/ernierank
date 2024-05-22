@@ -8,6 +8,7 @@ from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_p
 from generate_content import generate_seo_content, process_new_data
 from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
 from fastapi import FastAPI, HTTPException, Depends, Body, Request, BackgroundTasks, Response
+from fastapi.encoders import jsonable_encoder
 import httpx
 from httpx import AsyncClient, Timeout, RemoteProtocolError
 from bs4 import BeautifulSoup
@@ -60,51 +61,38 @@ def read_root():
 
 ########## ANALYZE_URL ############
 
-class BatchRequest(BaseModel):
-    domain: str
-    batch_size: int = 100  # valor por defecto
-    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
+class URLData(BaseModel):
+    url: str
+    title: str
+    meta_description: str
+    main_keyword: str
+    secondary_keywords: list
+    semantic_search_intent: str
+
+class ProcessedURLs(BaseModel):
+    processed_urls: list[URLData]
+    more_batches: bool = False
+    next_batch_start: int = None
+
+class ThinContentAnalysis(BaseModel):
+    thin_content_pages: list
 
 @app.post("/process_urls_in_batches")
-async def process_urls_in_batches(request: BatchRequest):
-    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    print(f"Fetching URLs from: {sitemap_url}")
-    urls = await fetch_sitemap(app.state.client, sitemap_url)
+async def process_urls_in_batches(domain: str):
+    all_urls = []
+    start = 0
+    more_batches = True
 
-    if not urls:
-        print("No URLs found in the sitemap.")
-        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
-    
-    print(f"Total URLs fetched for processing: {len(urls)}")
-    urls_to_process = urls[request.start:request.start + request.batch_size]
-    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
+    while more_batches:
+        response = requests.post("https://ernierank-vd20.onrender.com/process_urls_in_batches", json={"domain": domain, "batch_size": 100, "start": start})
+        response.raise_for_status()
+        batch_data = response.json()
 
-    tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-    print(f"Results received: {results}")
+        all_urls.extend(batch_data['processed_urls'])
+        more_batches = batch_data['more_batches']
+        start = batch_data['next_batch_start']
 
-    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
-    valid_results = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "meta_description": result.get('meta_description', "No description provided"),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        } for result in results if result
-    ]
-    print(f"Filtered results: {valid_results}")
-
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
-    print(f"More batches: {more_batches}, Next batch start index: {next_start}")
-
-    return {
-        "processed_urls": valid_results,
-        "more_batches": more_batches,
-        "next_batch_start": next_start if more_batches else None
-    }
+    return all_urls
 
 async def fetch_sitemap(client, base_url):
     headers = {
@@ -326,38 +314,30 @@ class ThinContentRequest(BaseModel):
         return v
 
 @app.post("/analyze_thin_content")
-async def analyze_thin_content_endpoint(request: Request):
+async def analyze_thin_content(request: ThinContentRequest):
     try:
-        request_data = await request.json()
-
-        try:
-            thin_request = ThinContentRequest(**request_data)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
-
-        if not thin_request.processed_urls:
+        processed_urls = jsonable_encoder(request.processed_urls)  # Convertir objetos URLData a JSON serializable
+        if not processed_urls:
             raise HTTPException(status_code=400, detail="No URLs provided")
 
-        analysis_results = await analyze_thin_content(thin_request)
+        thin_content_data = []
+        batch_size = 5  # Define el tamaño del lote
+        for i in range(0, len(processed_urls), batch_size):
+            batch = processed_urls[i:i + batch_size]
+            batch_result = await analyze_thin_content_data(batch)
+            thin_content_data.extend(batch_result['thin_content_pages'])
 
-        formatted_response = {
-            "thin_content_pages": [
-                {
-                    "url": urllib.parse.urlparse(page["url"]).path,  # Devuelve solo la parte del path de la URL
-                    "level": page["level"],
-                    "description": page["details"]
-                }
-                for page in analysis_results["thin_content_pages"]
-            ]
-        }
+        return {"thin_content_pages": thin_content_data}
 
-        return formatted_response
+    except requests.HTTPError as http_err:
+        raise HTTPException(status_code=500, detail=f"HTTP error occurred: {http_err}")
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=f"An error occurred: {err}")
 
-    except HTTPException as http_exc:
-        # Log specific for HTTP errors that are raised deliberately
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+async def analyze_thin_content_data(processed_urls):
+    response = requests.post("https://ernierank-vd20.onrender.com/analyze_thin_content", json={"processed_urls": processed_urls})
+    response.raise_for_status()
+    return response.json()
 
 def tarea_demorada(nombre: str):
     time.sleep(10)  # Simula un proceso que tarda 10 segundos
