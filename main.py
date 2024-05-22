@@ -6,9 +6,9 @@ from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
 from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
 from generate_content import generate_seo_content, process_new_data
+from analyze_404 import fetch_urls, check_url, crawl_site, find_broken_links
 from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
 from fastapi import FastAPI, HTTPException, Depends, Body, Request, BackgroundTasks, Response
-from fastapi.encoders import jsonable_encoder
 import httpx
 from httpx import AsyncClient, Timeout, RemoteProtocolError
 from bs4 import BeautifulSoup
@@ -63,26 +63,8 @@ def read_root():
 
 class BatchRequest(BaseModel):
     domain: str
-    batch_size: int
-    start: int
-
-class URLData(BaseModel):
-    url: str
-    title: str
-    meta_description: str
-    main_keyword: str
-    secondary_keywords: list
-    semantic_search_intent: str
-
-class ProcessedURLs(BaseModel):
-    processed_urls: list[URLData]
-    more_batches: bool = False
-    next_batch_start: int = None
-
-class ThinContentRequest(BaseModel):
-    processed_urls: List[URLData]
-    more_batches: bool = False
-    next_batch_start: Optional[int] = None
+    batch_size: int = 100  # valor por defecto
+    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
@@ -102,6 +84,7 @@ async def process_urls_in_batches(request: BatchRequest):
     results = await asyncio.gather(*tasks)
     print(f"Results received: {results}")
 
+    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
     valid_results = [
         {
             "url": result['url'],
@@ -123,7 +106,6 @@ async def process_urls_in_batches(request: BatchRequest):
         "more_batches": more_batches,
         "next_batch_start": next_start if more_batches else None
     }
-
 
 async def fetch_sitemap(client, base_url):
     headers = {
@@ -309,31 +291,74 @@ async def generate_content_endpoint(request: Request):
 
 ########### ANALYZE_THIN_CONTENT ##########
 
+# Configurando el logger
+
+class PageData(BaseModel):
+    url: HttpUrl
+    title: str
+    meta_description: Optional[str] = None
+    h1: Optional[str] = None
+    h2: Optional[List[str]] = []
+    main_keyword: Optional[str] = None
+    secondary_keywords: List[str]
+    semantic_search_intent: str
+
+    @validator('h1', 'meta_description', 'main_keyword', pre=True, always=True)
+    def ensure_not_empty(cls, v):
+        if v == "":
+            return None
+        return v
+
+    @validator('h2', pre=True, always=True)
+    def ensure_list(cls, v):
+        if v is None:
+            return []
+        return v
+
+class ThinContentRequest(BaseModel):
+    processed_urls: List[PageData]
+    more_batches: bool = False
+    next_batch_start: Optional[int] = None
+
+    @validator('processed_urls', each_item=True)
+    def check_urls(cls, v):
+        if not v.title or not v.url:
+            raise ValueError("URL and title must be provided for each item.")
+        return v
+
 @app.post("/analyze_thin_content")
-async def analyze_thin_content(request: ThinContentRequest):
+async def analyze_thin_content_endpoint(request: Request):
     try:
-        processed_urls = jsonable_encoder(request.processed_urls)
-        if not processed_urls:
+        request_data = await request.json()
+
+        try:
+            thin_request = ThinContentRequest(**request_data)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
+
+        if not thin_request.processed_urls:
             raise HTTPException(status_code=400, detail="No URLs provided")
 
-        thin_content_data = []
-        batch_size = 5  # Define el tamaño del lote
-        for i in range(0, len(processed_urls), batch_size):
-            batch = processed_urls[i:i + batch_size]
-            batch_result = await analyze_thin_content_data(batch)
-            thin_content_data.extend(batch_result['thin_content_pages'])
+        analysis_results = await analyze_thin_content(thin_request)
 
-        return {"thin_content_pages": thin_content_data}
+        formatted_response = {
+            "thin_content_pages": [
+                {
+                    "url": urllib.parse.urlparse(page["url"]).path,  # Devuelve solo la parte del path de la URL
+                    "level": page["level"],
+                    "description": page["details"]
+                }
+                for page in analysis_results["thin_content_pages"]
+            ]
+        }
 
-    except requests.HTTPError as http_err:
-        raise HTTPException(status_code=500, detail=f"HTTP error occurred: {http_err}")
-    except Exception as err:
-        raise HTTPException(status_code=500, detail=f"An error occurred: {err}")
+        return formatted_response
 
-async def analyze_thin_content_data(processed_urls):
-    response = requests.post("https://ernierank-vd20.onrender.com/analyze_thin_content", json={"processed_urls": processed_urls})
-    response.raise_for_status()
-    return response.json()
+    except HTTPException as http_exc:
+        # Log specific for HTTP errors that are raised deliberately
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 def tarea_demorada(nombre: str):
     time.sleep(10)  # Simula un proceso que tarda 10 segundos
@@ -367,6 +392,53 @@ async def analyze_thin_content_directly(request: ThinContentRequest):
 
 #######################################
 
+
+
+########### ANALYZE_404 ##########
+
+class DomainRequest(BaseModel):
+    domain: HttpUrl
+
+async def fetch_page(url: str, client: httpx.AsyncClient):
+    try:
+        response = await client.get(url)
+        if response.status_code == 404:
+            return None, 404
+        response.raise_for_status()
+        return response.text, response.status_code
+    except httpx.HTTPStatusError as e:
+        return None, e.response.status_code
+    except httpx.HTTPError:
+        return None, 500
+
+async def crawl_page(url: str, base_url: str, client: httpx.AsyncClient, visited: set):
+    if url in visited:
+        return []
+    visited.add(url)
+    content, status = await fetch_page(url, client)
+    results = [{"url": url, "status": status}]
+    if content is None:
+        return results
+
+    soup = BeautifulSoup(content, 'html.parser')
+    links = [link.get('href') for link in soup.find_all('a', href=True)]
+    internal_links = {urljoin(base_url, link) for link in links if link and (link.startswith('/') or base_url in link)}
+
+    tasks = [crawl_page(link, base_url, client, visited) for link in internal_links]
+    crawled_pages = await asyncio.gather(*tasks)
+    for page in crawled_pages:
+        results.extend(page)
+    return results
+
+@app.post("/check-domain/")
+async def check_domain(request: DomainRequest):
+    base_url = request.domain.rstrip('/')
+    visited = set()
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        results = await crawl_page(base_url, base_url, client, visited)
+        return results
+
+###################################
 
 
 ############ SEARCH_KEYWORDS #############
