@@ -339,7 +339,7 @@ async def analyze_thin_content_endpoint(request: Request):
         if not thin_request.processed_urls:
             raise HTTPException(status_code=400, detail="No URLs provided")
 
-        analysis_results = await analyze_thin_content(thin_request)
+        analysis_results = await analyze_thin_content.analyze_thin_content(thin_request.processed_urls)
 
         formatted_response = {
             "thin_content_pages": [
@@ -348,14 +348,13 @@ async def analyze_thin_content_endpoint(request: Request):
                     "level": page["level"],
                     "description": page["details"]
                 }
-                for page in analysis_results["thin_content_pages"]
+                for page in analysis_results["thin_content_urls"]
             ]
         }
 
         return formatted_response
 
     except HTTPException as http_exc:
-        # Log specific for HTTP errors that are raised deliberately
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

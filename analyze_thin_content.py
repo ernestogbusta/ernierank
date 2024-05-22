@@ -3,7 +3,7 @@ import urllib.parse
 import asyncio
 from fastapi import HTTPException, Response
 from pydantic import BaseModel, HttpUrl, validator
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 import logging
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -178,22 +178,27 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
     details = ', '.join(issues) if issues else 'Enhorabuena, no hay errores de thin content'
     return normalized_score, details
 
-async def analyze_thin_content(request: ThinContentRequest):
-    if not request.processed_urls:
-        raise HTTPException(status_code=404, detail="No URL data available for analysis.")
+def analyze_thin_content(processed_urls: List[Dict[str, Any]]):
+    thin_content_urls = []
 
-    logging.debug(f"Procesando análisis de contenido delgado para {len(request.processed_urls)} URLs.")
-    tasks = [calculate_thin_content_score_and_details(page) for page in request.processed_urls]
-    results = await asyncio.gather(*tasks)
+    for url_data in processed_urls:
+        url = url_data.get("url")
+        title = url_data.get("title")
+        meta_description = url_data.get("meta_description")
+        main_keyword = url_data.get("main_keyword")
+        secondary_keywords = url_data.get("secondary_keywords", [])
+        content_length = len(url_data.get("content", ""))  # Assumes content is part of the data
 
-    thin_content_pages = [
-        {
-            "url": page.url,
-            "thin_score": result[0] * max_score,
-            "level": classify_content_level(result[0]),
-            "details": result[1]
-        }
-        for page, result in zip(request.processed_urls, results) if classify_content_level(result[0]) != "none"
-    ]
+        # Define criteria for thin content
+        if content_length < 500 or not title or not meta_description or not main_keyword:
+            thin_content_urls.append({
+                "url": url,
+                "level": "thin content",
+                "details": f"Content length: {content_length}, Title: {title}, Meta description: {meta_description}, Main keyword: {main_keyword}"
+            })
 
-    return {"thin_content_pages": thin_content_pages} if thin_content_pages else {"message": "No thin content detected"}
+    return {
+        "thin_content_urls": thin_content_urls,
+        "total_analyzed": len(processed_urls),
+        "thin_content_count": len(thin_content_urls)
+    }
