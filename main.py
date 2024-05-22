@@ -6,6 +6,7 @@ from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
 from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
 from generate_content import generate_seo_content, process_new_data
+from analyze_404 import fetch_urls, check_url, crawl_site, find_broken_links
 from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
 from fastapi import FastAPI, HTTPException, Depends, Body, Request, BackgroundTasks, Response
 import httpx
@@ -32,8 +33,6 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 import numpy as np
 import sys
-
-logging.basicConfig(level=logging.DEBUG)
 
 app = FastAPI(title="ErnieRank API")
 
@@ -64,30 +63,28 @@ def read_root():
 
 class BatchRequest(BaseModel):
     domain: str
-    start: int = 0
-    batch_size: int = 100
-
-class ThinContentRequest(BaseModel):
-    processed_urls: List[dict]
+    batch_size: int = 100  # valor por defecto
+    start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
-    logging.debug(f"Fetching URLs from: {sitemap_url}")
+    print(f"Fetching URLs from: {sitemap_url}")
     urls = await fetch_sitemap(app.state.client, sitemap_url)
 
     if not urls:
-        logging.error("No URLs found in the sitemap.")
+        print("No URLs found in the sitemap.")
         raise HTTPException(status_code=404, detail="Sitemap not found or empty")
     
-    logging.debug(f"Total URLs fetched for processing: {len(urls)}")
+    print(f"Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
-    logging.debug(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
+    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
 
     tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
     results = await asyncio.gather(*tasks)
-    logging.debug(f"Results received: {results}")
+    print(f"Results received: {results}")
 
+    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
     valid_results = [
         {
             "url": result['url'],
@@ -98,11 +95,11 @@ async def process_urls_in_batches(request: BatchRequest):
             "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
         } for result in results if result
     ]
-    logging.debug(f"Filtered results: {valid_results}")
+    print(f"Filtered results: {valid_results}")
 
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
-    logging.debug(f"More batches: {more_batches}, Next batch start index: {next_start}")
+    print(f"More batches: {more_batches}, Next batch start index: {next_start}")
 
     return {
         "processed_urls": valid_results,
@@ -110,18 +107,43 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(client: httpx.AsyncClient, sitemap_url: str) -> list:
-    try:
-        response = await client.get(sitemap_url)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'xml')
-            urls = [loc.text for loc in soup.find_all('loc')]
-            return urls
-        else:
-            return []
-    except Exception as e:
-        logging.error(f"Error fetching sitemap: {e}")
-        return []
+async def fetch_sitemap(client, base_url):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
+        "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
+    }
+    # Asegurarse de que la base URL es correcta, eliminando cualquier ruta adicional incorrectamente añadida
+    base_url = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
+
+    sitemap_paths = ['/sitemap_index.xml', '/sitemap.xml', '/sitemap1.xml']  # Diferentes endpoints de sitemap comunes
+    all_urls = []
+
+    for path in sitemap_paths:
+        url = f"{base_url.rstrip('/')}{path}"
+        try:
+            response = await client.get(url, headers=headers)
+            if response.status_code == 404:
+                continue  # Si no se encuentra el sitemap en esta ruta, intenta con la siguiente
+            response.raise_for_status()
+            sitemap_contents = xmltodict.parse(response.content)
+
+            # Procesando sitemap index
+            if 'sitemapindex' in sitemap_contents:
+                sitemap_indices = sitemap_contents['sitemapindex'].get('sitemap', [])
+                sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
+                for sitemap in sitemap_indices:
+                    sitemap_url = sitemap['loc']
+                    all_urls.extend(await fetch_individual_sitemap(client, sitemap_url))
+            # Procesando urlset directamente si está presente
+            elif 'urlset' in sitemap_contents:
+                all_urls.extend([url['loc'] for url in sitemap_contents['urlset']['url']])
+        except Exception as e:
+            print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
+
+    if not all_urls:
+        print("No sitemaps found at any known locations.")
+        return None
+    return all_urls
 
 async def fetch_individual_sitemap(client, sitemap_url):
     headers = {
@@ -305,45 +327,38 @@ class ThinContentRequest(BaseModel):
         return v
 
 @app.post("/analyze_thin_content")
-async def analyze_thin_content_endpoint(request: ThinContentRequest):
-    domain = request.domain
-    batch_size = 100  # Define el tamaño del lote, puede ser ajustado según tus necesidades
-    start = 0
+async def analyze_thin_content_endpoint(request: Request):
+    try:
+        request_data = await request.json()
 
-    all_processed_urls = []
+        try:
+            thin_request = ThinContentRequest(**request_data)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
 
-    while True:
-        batch_request = BatchRequest(domain=domain, start=start, batch_size=batch_size)
-        batch_response = await process_urls_in_batches(batch_request)
-        
-        processed_urls = batch_response.get("processed_urls", [])
-        all_processed_urls.extend(processed_urls)
-        
-        if not batch_response.get("more_batches", False):
-            break
-        
-        start = batch_response.get("next_batch_start", None)
-        if start is None:
-            break
+        if not thin_request.processed_urls:
+            raise HTTPException(status_code=400, detail="No URLs provided")
 
-    if not all_processed_urls:
-        raise HTTPException(status_code=404, detail="No URLs processed from the provided domain.")
+        analysis_results = await analyze_thin_content(thin_request)
 
-    thin_request = ThinContentRequest(processed_urls=all_processed_urls)
-    analysis_results = await analyze_thin_content(thin_request)
+        formatted_response = {
+            "thin_content_pages": [
+                {
+                    "url": urllib.parse.urlparse(page["url"]).path,  # Devuelve solo la parte del path de la URL
+                    "level": page["level"],
+                    "description": page["details"]
+                }
+                for page in analysis_results["thin_content_pages"]
+            ]
+        }
 
-    formatted_response = {
-        "thin_content_pages": [
-            {
-                "url": page["url"],
-                "level": page["level"],
-                "description": page["details"]
-            }
-            for page in analysis_results["thin_content_pages"]
-        ]
-    }
+        return formatted_response
 
-    return formatted_response
+    except HTTPException as http_exc:
+        # Log specific for HTTP errors that are raised deliberately
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 def tarea_demorada(nombre: str):
     time.sleep(10)  # Simula un proceso que tarda 10 segundos
@@ -378,6 +393,52 @@ async def analyze_thin_content_directly(request: ThinContentRequest):
 #######################################
 
 
+
+########### ANALYZE_404 ##########
+
+class DomainRequest(BaseModel):
+    domain: HttpUrl
+
+async def fetch_page(url: str, client: httpx.AsyncClient):
+    try:
+        response = await client.get(url)
+        if response.status_code == 404:
+            return None, 404
+        response.raise_for_status()
+        return response.text, response.status_code
+    except httpx.HTTPStatusError as e:
+        return None, e.response.status_code
+    except httpx.HTTPError:
+        return None, 500
+
+async def crawl_page(url: str, base_url: str, client: httpx.AsyncClient, visited: set):
+    if url in visited:
+        return []
+    visited.add(url)
+    content, status = await fetch_page(url, client)
+    results = [{"url": url, "status": status}]
+    if content is None:
+        return results
+
+    soup = BeautifulSoup(content, 'html.parser')
+    links = [link.get('href') for link in soup.find_all('a', href=True)]
+    internal_links = {urljoin(base_url, link) for link in links if link and (link.startswith('/') or base_url in link)}
+
+    tasks = [crawl_page(link, base_url, client, visited) for link in internal_links]
+    crawled_pages = await asyncio.gather(*tasks)
+    for page in crawled_pages:
+        results.extend(page)
+    return results
+
+@app.post("/check-domain/")
+async def check_domain(request: DomainRequest):
+    base_url = request.domain.rstrip('/')
+    visited = set()
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        results = await crawl_page(base_url, base_url, client, visited)
+        return results
+
+###################################
 
 
 ############ SEARCH_KEYWORDS #############
