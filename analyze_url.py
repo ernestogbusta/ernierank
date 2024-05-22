@@ -4,6 +4,7 @@ import re
 from urllib.parse import urlparse
 from collections import Counter
 import httpx
+import logging
 
 async def analyze_url(url: str, client: httpx.AsyncClient) -> dict:
     headers = {

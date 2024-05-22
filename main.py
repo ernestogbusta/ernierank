@@ -33,6 +33,8 @@ from sklearn.preprocessing import PolynomialFeatures
 import numpy as np
 import sys
 
+logging.basicConfig(level=logging.DEBUG)
+
 app = FastAPI(title="ErnieRank API")
 
 @app.on_event("startup")
