@@ -5,6 +5,7 @@ from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis,
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
 from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
+import analyze_thin_content
 from generate_content import generate_seo_content, process_new_data
 from analyze_404 import fetch_urls, check_url, crawl_site, find_broken_links
 from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
@@ -18,7 +19,7 @@ import json
 from pydantic import BaseModel, HttpUrl, validator
 import uvicorn
 from collections import Counter
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from urllib.parse import urlparse, urljoin
 import urllib.parse
 import re
@@ -316,16 +317,9 @@ class PageData(BaseModel):
         return v
 
 class ThinContentRequest(BaseModel):
-    processed_urls: List[PageData]
-    more_batches: bool = False
-    next_batch_start: Optional[int] = None
+    processed_urls: List[Dict[str, Any]]
 
-    @validator('processed_urls', each_item=True)
-    def check_urls(cls, v):
-        if not v.title or not v.url:
-            raise ValueError("URL and title must be provided for each item.")
-        return v
-
+# Nuevo endpoint para analizar Thin Content
 @app.post("/analyze_thin_content")
 async def analyze_thin_content_endpoint(request: Request):
     try:
@@ -339,7 +333,8 @@ async def analyze_thin_content_endpoint(request: Request):
         if not thin_request.processed_urls:
             raise HTTPException(status_code=400, detail="No URLs provided")
 
-        analysis_results = await analyze_thin_content.analyze_thin_content(thin_request.processed_urls)
+        # Llamada correcta a la función analyze_thin_content del módulo
+        analysis_results = analyze_thin_content.analyze_thin_content(thin_request.processed_urls)
 
         formatted_response = {
             "thin_content_pages": [

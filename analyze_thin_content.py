@@ -8,8 +8,6 @@ import logging
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
-
-
 class PageData(BaseModel):
     url: HttpUrl
     title: str
@@ -182,12 +180,13 @@ def analyze_thin_content(processed_urls: List[Dict[str, Any]]):
     thin_content_urls = []
 
     for url_data in processed_urls:
-        url = url_data.get("url")
-        title = url_data.get("title")
-        meta_description = url_data.get("meta_description")
-        main_keyword = url_data.get("main_keyword")
+        url = url_data.get("url", "")
+        title = url_data.get("title", "")
+        meta_description = url_data.get("meta_description", "")
+        main_keyword = url_data.get("main_keyword", "")
         secondary_keywords = url_data.get("secondary_keywords", [])
-        content_length = len(url_data.get("content", ""))  # Assumes content is part of the data
+        content = url_data.get("content", "")
+        content_length = len(content)
 
         # Define criteria for thin content
         if content_length < 500 or not title or not meta_description or not main_keyword:
