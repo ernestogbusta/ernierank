@@ -11,7 +11,7 @@ async def analyze_url(url: str, client: httpx.AsyncClient) -> dict:
     }
     try:
         response = await client.get(url, headers=headers)
-        print(f"Attempting to process URL: {url} with status: {response.status_code}")
+        logging.debug(f"Attempting to process URL: {url} with status: {response.status_code}")
         if response.status_code == 200 and 'text/html' in response.headers.get('Content-Type', ''):
             soup = BeautifulSoup(response.content, 'html.parser')
             slug = extract_slug(url)
@@ -36,7 +36,7 @@ async def analyze_url(url: str, client: httpx.AsyncClient) -> dict:
         else:
             return None
     except Exception as e:
-        print(f"Error processing URL {url}: {e}")
+        logging.error(f"Error processing URL {url}: {e}")
         return None
 
 def calculate_semantic_search_intent(main_keyword, secondary_keywords):

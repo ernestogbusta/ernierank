@@ -189,7 +189,7 @@ async def analyze_thin_content(request: ThinContentRequest):
     thin_content_pages = [
         {
             "url": page.url,
-            "thin_score": result[0] * max_score,
+            "thin_score": result[0] * 100,  # assuming max_score is 100
             "level": classify_content_level(result[0]),
             "details": result[1]
         }
