@@ -25,7 +25,6 @@ import re
 import asyncio
 import time
 import requests
-import logging
 from starlette.middleware.gzip import GZipMiddleware
 import pytrends
 from pytrends.request import TrendReq
@@ -69,7 +68,11 @@ class BatchRequest(BaseModel):
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
-    sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
+    domain = request.domain
+    if not domain.startswith("http://") and not domain.startswith("https://"):
+        domain = f"https://{domain}"
+    
+    sitemap_url = f"{domain.rstrip('/')}/sitemap_index.xml"
     print(f"Fetching URLs from: {sitemap_url}")
     urls = await fetch_sitemap(app.state.client, sitemap_url)
 

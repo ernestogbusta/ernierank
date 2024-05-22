@@ -1,10 +1,7 @@
 import re
 import urllib.parse
-import logging
 from typing import List, Optional, Tuple, Dict, Any
 from pydantic import BaseModel, HttpUrl, validator
-
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
 class PageData(BaseModel):
     url: HttpUrl
@@ -18,14 +15,12 @@ class PageData(BaseModel):
 
     @validator('h1', 'meta_description', 'main_keyword', pre=True, always=True)
     def ensure_not_empty(cls, v):
-        logging.debug(f"Validando si el campo está vacío: {v}")
         if v == "":
             return None
         return v
 
     @validator('h2', pre=True, always=True)
     def ensure_list(cls, v):
-        logging.debug(f"Validando si h2 es una lista: {v}")
         if v is None:
             return []
         return v
@@ -37,13 +32,11 @@ class ThinContentRequest(BaseModel):
 
     @validator('processed_urls', each_item=True)
     def check_urls(cls, v):
-        logging.debug(f"Validando URL y título: {v.url}, {v.title}")
         if not v.title or not v.url:
             raise ValueError("URL and title must be provided for each item.")
         return v
 
 def fetch_processed_data_or_process_batches(domain: str) -> ThinContentRequest:
-    logging.debug(f"Iniciando la obtención de datos procesados para el dominio: {domain}")
     processed_data = ThinContentRequest(processed_urls=[
         PageData(
             url='http://example.com/page1',
@@ -66,7 +59,6 @@ def fetch_processed_data_or_process_batches(domain: str) -> ThinContentRequest:
             semantic_search_intent='second intent'
         )
     ])
-    logging.debug(f"Datos procesados obtenidos para {domain}: {processed_data}")
     return processed_data
 
 # Asumamos que hemos revisado y confirmado que el max_score es adecuado:
@@ -77,7 +69,6 @@ hyphen_space_pattern = re.compile(r'-')
 stopwords = set(["de", "la", "el", "en", "y", "a", "los", "un", "como", "una", "por", "para"])
 
 def clean_and_split(text: str) -> str:
-    logging.debug(f"Limpieza y división del texto: {text}")
     if text is None:
         return ''
     return ' '.join(word for word in hyphen_space_pattern.sub(' ', text.lower()).split() if word not in stopwords)
