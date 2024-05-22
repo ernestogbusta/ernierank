@@ -305,40 +305,45 @@ class ThinContentRequest(BaseModel):
         return v
 
 @app.post("/analyze_thin_content")
-async def analyze_thin_content_endpoint(request: Request):
-    try:
-        request_data = await request.json()
+async def analyze_thin_content_endpoint(request: ThinContentRequest):
+    domain = request.domain
+    batch_size = 100  # Define el tamaño del lote, puede ser ajustado según tus necesidades
+    start = 0
 
-        try:
-            thin_request = ThinContentRequest(**request_data)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
+    all_processed_urls = []
 
-        if not thin_request.processed_urls:
-            raise HTTPException(status_code=400, detail="No URLs provided")
+    while True:
+        batch_request = BatchRequest(domain=domain, start=start, batch_size=batch_size)
+        batch_response = await process_urls_in_batches(batch_request)
+        
+        processed_urls = batch_response.get("processed_urls", [])
+        all_processed_urls.extend(processed_urls)
+        
+        if not batch_response.get("more_batches", False):
+            break
+        
+        start = batch_response.get("next_batch_start", None)
+        if start is None:
+            break
 
-        analysis_results = await analyze_thin_content(thin_request)
+    if not all_processed_urls:
+        raise HTTPException(status_code=404, detail="No URLs processed from the provided domain.")
 
-        formatted_response = {
-            "thin_content_pages": [
-                {
-                    "url": page["url"],  # Ensure this is correct as per your models
-                    "level": page["level"],
-                    "description": page["details"]
-                }
-                for page in analysis_results["thin_content_pages"]
-            ]
-        }
+    thin_request = ThinContentRequest(processed_urls=all_processed_urls)
+    analysis_results = await analyze_thin_content(thin_request)
 
-        return formatted_response
+    formatted_response = {
+        "thin_content_pages": [
+            {
+                "url": page["url"],
+                "level": page["level"],
+                "description": page["details"]
+            }
+            for page in analysis_results["thin_content_pages"]
+        ]
+    }
 
-    except HTTPException as http_exc:
-        logging.error(f"HTTP error: {http_exc.detail}")
-        raise
-    except Exception as e:
-        logging.error(f"Internal server error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
+    return formatted_response
 
 def tarea_demorada(nombre: str):
     time.sleep(10)  # Simula un proceso que tarda 10 segundos
