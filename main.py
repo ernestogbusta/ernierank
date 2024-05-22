@@ -4,8 +4,7 @@ from analyze_url import analyze_url
 from analyze_internal_links import analyze_internal_links, InternalLinkAnalysis, correct_url_format
 from analyze_wpo import analyze_wpo
 from analyze_cannibalization import analyze_cannibalization
-from analyze_thin_content import analyze_thin_content, fetch_processed_data_or_process_batches, calculate_thin_content_score_and_details, clean_and_split, classify_content_level
-import analyze_thin_content
+from analyze_thin_content import analyze_thin_content, ThinContentRequest
 from generate_content import generate_seo_content, process_new_data
 from analyze_404 import fetch_urls, check_url, crawl_site, find_broken_links
 from analyze_robots import fetch_robots_txt, analyze_robots_txt, RobotsTxtRequest
@@ -322,84 +321,63 @@ class ThinContentRequest(BaseModel):
     processed_urls: List[Dict[str, Any]]
 
 @app.post("/analyze_thin_content")
-async def analyze_thin_content_endpoint(request: ThinContentRequest):
+async def analyze_thin_content_endpoint(request: Request):
     try:
-        if not request.processed_urls:
+        request_data = await request.json()
+        try:
+            thin_request = ThinContentRequest(**request_data)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
+
+        if not thin_request.processed_urls:
             raise HTTPException(status_code=400, detail="No URLs provided")
 
-        # Llamada correcta a la función analyze_thin_content del módulo
-        analysis_results = analyze_thin_content.analyze_thin_content(request.processed_urls)
+        analysis_results = analyze_thin_content(thin_request.processed_urls)
 
         formatted_response = {
             "thin_content_pages": [
                 {
-                    "url": urllib.parse.urlparse(page["url"]).path,  # Devuelve solo la parte del path de la URL
+                    "url": urllib.parse.urlparse(page["url"]).path,
                     "level": page["level"],
                     "description": page["details"]
                 }
                 for page in analysis_results["thin_content_urls"]
             ]
         }
-
         return formatted_response
-
     except HTTPException as http_exc:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-def tarea_demorada(nombre: str):
-    time.sleep(10)  # Simula un proceso que tarda 10 segundos
-
-@app.post("/start-delayed-task/")
-async def start_delayed_task(nombre: str, background_tasks: BackgroundTasks):
-    background_tasks.add_task(tarea_demorada, nombre=nombre)
-    return {"message": "Tarea demorada iniciada en segundo plano"}
-
-def analyze_content_in_background(request: ThinContentRequest):
-    for page in request.processed_urls:
-        logging.debug(f"Analizando en segundo plano {page.url}")
-    logging.debug("Análisis de contenido delgado en segundo plano completado")
-
-async def analyze_thin_content_directly(request: ThinContentRequest):
-    if not request.processed_urls:
-        raise HTTPException(status_code=400, detail="No URLs provided")
-    results = []
-    for page in request.processed_urls:
-        try:
-            score, level, details = await calculate_thin_content_score_and_details(page)
-            results.append({
-                "url": page.url,
-                "score": score,
-                "level": level,
-                "details": details
-            })
-        except Exception as e:
-            continue
-    return {"message": "Análisis completado", "data": results}
-
 
 @app.post("/full_thin_content_analysis")
 async def full_thin_content_analysis(request: Request):
     try:
         request_data = await request.json()
         
-        # Paso 1: Procesar las URLs en lotes
         batch_request = BatchRequest(**request_data)
         process_urls_response = await process_urls_in_batches(batch_request)
 
-        # Verifica que la respuesta sea correcta y obtén los datos
         if not process_urls_response:
             raise HTTPException(status_code=500, detail="Error processing URLs in batches")
 
-        # Paso 2: Analizar el thin content usando los datos procesados
         thin_content_request = ThinContentRequest(
             processed_urls=process_urls_response["processed_urls"]
         )
-        analyze_thin_content_response = await analyze_thin_content_endpoint(thin_content_request)
 
-        # Verifica la respuesta y procesa los resultados
-        return analyze_thin_content_response
+        analysis_results = analyze_thin_content(thin_content_request.processed_urls)
+
+        formatted_response = {
+            "thin_content_pages": [
+                {
+                    "url": urllib.parse.urlparse(page["url"]).path,
+                    "level": page["level"],
+                    "description": page["details"]
+                }
+                for page in analysis_results["thin_content_urls"]
+            ]
+        }
+        return formatted_response
 
     except HTTPException as http_exc:
         raise
