@@ -1,12 +1,14 @@
 import re
 import urllib.parse
 import asyncio
-from fastapi import HTTPException
+from fastapi import HTTPException, Response
 from pydantic import BaseModel, HttpUrl, validator
 from typing import List, Optional, Tuple
 import logging
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
 
 class PageData(BaseModel):
     url: HttpUrl
@@ -20,12 +22,14 @@ class PageData(BaseModel):
 
     @validator('h1', 'meta_description', 'main_keyword', pre=True, always=True)
     def ensure_not_empty(cls, v):
+        logging.debug(f"Validando si el campo está vacío: {v}")
         if v == "":
             return None
         return v
 
     @validator('h2', pre=True, always=True)
     def ensure_list(cls, v):
+        logging.debug(f"Validando si h2 es una lista: {v}")
         if v is None:
             return []
         return v
@@ -37,14 +41,13 @@ class ThinContentRequest(BaseModel):
 
     @validator('processed_urls', each_item=True)
     def check_urls(cls, v):
+        logging.debug(f"Validando URL y título: {v.url}, {v.title}")
         if not v.title or not v.url:
             raise ValueError("URL and title must be provided for each item.")
         return v
 
 async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentRequest:
     logging.debug(f"Iniciando la obtención de datos procesados para el dominio: {domain}")
-    # Aquí deberías implementar la lógica para llamar al endpoint /process_urls_in_batches
-    # Simulación de la respuesta
     processed_data = ThinContentRequest(processed_urls=[
         PageData(
             url='http://example.com/page1',
@@ -70,26 +73,40 @@ async def fetch_processed_data_or_process_batches(domain: str) -> ThinContentReq
     logging.debug(f"Datos procesados obtenidos para {domain}: {processed_data}")
     return processed_data
 
+# Asumamos que hemos revisado y confirmado que el max_score es adecuado:
+max_score = 1.0  # Puedes ajustar este valor según el máximo real derivado de tu análisis de componentes.
+
 def classify_content_level(normalized_score: float) -> str:
+    logging.debug(f"Clasificando el nivel de contenido con puntuación normalizada: {normalized_score}")
     if normalized_score >= 0.6:
+        logging.debug("Contenido clasificado como 'high'")
         return "high"
     elif normalized_score >= 0.3:
+        logging.debug("Contenido clasificado como 'medium'")
         return "medium"
     elif normalized_score > 0.1:
+        logging.debug("Contenido clasificado como 'low'")
         return "low"
+    logging.debug("Contenido clasificado como 'none'")
     return "none"
 
+
+# Precompile regular expressions for efficiency
 hyphen_space_pattern = re.compile(r'-')
 stopwords = set(["de", "la", "el", "en", "y", "a", "los", "un", "como", "una", "por", "para"])
 
 def clean_and_split(text: str) -> str:
+    logging.debug(f"Limpieza y división del texto: {text}")
     if text is None:
         return ''
     return ' '.join(word for word in hyphen_space_pattern.sub(' ', text.lower()).split() if word not in stopwords)
 
 def keyword_in_text(keyword: str, text: str) -> bool:
+    """
+    Comprueba si todas las palabras de la keyword están en el texto, ignorando el orden y la puntuación.
+    """
     if keyword is None or text is None:
-        return False
+        return False  # Retorna falso si la keyword o el texto son None
     keyword_words = set(re.sub(r'[^\w\s]', '', keyword.lower()).split())
     text_words = set(re.sub(r'[^\w\s]', '', text.lower()).split())
     return keyword_words.issubset(text_words)
@@ -105,6 +122,7 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
     keyword_normalized = clean_and_split(page.main_keyword)
     slug_normalized = clean_and_split(urllib.parse.urlparse(page.url).path)
 
+    logging.debug(f"Análisis de título: {title_normalized}, URL: {page.url}")
     if not page.title:
         issues.append(f"No hay title en {page.url}")
         score += 1
@@ -115,6 +133,7 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
         issues.append(f"Keyword '{page.main_keyword}' no incluida en title en {page.url}")
         score += 1
 
+    logging.debug(f"Análisis de meta descripción: {meta_description_normalized}")
     if not page.meta_description:
         issues.append(f"No hay meta description en {page.url}")
         score += 0.6
@@ -125,6 +144,7 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
         issues.append(f"Keyword '{page.main_keyword}' no incluida en meta description en {page.url}")
         score += 0.25
 
+    logging.debug(f"Análisis de H1: {h1_normalized}")
     if not page.h1:
         issues.append(f"No hay H1 en {page.url}")
         score += 1
@@ -135,6 +155,7 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
         issues.append(f"Keyword '{page.main_keyword}' no incluida en H1 en {page.url}")
         score += 0.9
 
+    logging.debug(f"Análisis de H2: {page.h2}")
     if not page.h2:
         issues.append(f"No hay H2 en {page.url}")
         score += 0.7
@@ -148,6 +169,7 @@ async def calculate_thin_content_score_and_details(page: PageData, max_score: fl
                 h2_issues += 0.4
         score += min(h2_issues, 0.7)
 
+    logging.debug(f"Análisis de slug: {slug_normalized}")
     if not keyword_in_text(page.main_keyword, urllib.parse.urlparse(page.url).path):
         issues.append(f"El slug no incluye la keyword '{page.main_keyword}' en {page.url}")
         score += 1
@@ -161,8 +183,7 @@ async def analyze_thin_content(request: ThinContentRequest):
         raise HTTPException(status_code=404, detail="No URL data available for analysis.")
 
     logging.debug(f"Procesando análisis de contenido delgado para {len(request.processed_urls)} URLs.")
-    max_score = 1.0  # Definiendo max_score dentro del alcance de la función
-    tasks = [calculate_thin_content_score_and_details(page, max_score) for page in request.processed_urls]
+    tasks = [calculate_thin_content_score_and_details(page) for page in request.processed_urls]
     results = await asyncio.gather(*tasks)
 
     thin_content_pages = [

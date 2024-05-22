@@ -336,19 +336,14 @@ async def analyze_thin_content_endpoint(request: Request):
             raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
 
         if not thin_request.processed_urls:
-            # Intentar obtener los datos de /process_urls_in_batches si no hay URLs procesadas
-            domain = request_data.get("domain")
-            if domain:
-                thin_request = await fetch_processed_data_or_process_batches(domain)
-            else:
-                raise HTTPException(status_code=400, detail="No URLs provided and no domain specified")
+            raise HTTPException(status_code=400, detail="No URLs provided")
 
         analysis_results = await analyze_thin_content(thin_request)
 
         formatted_response = {
             "thin_content_pages": [
                 {
-                    "url": urllib.parse.urlparse(page["url"]).path,
+                    "url": urllib.parse.urlparse(page["url"]).path,  # Devuelve solo la parte del path de la URL
                     "level": page["level"],
                     "description": page["details"]
                 }
@@ -359,6 +354,7 @@ async def analyze_thin_content_endpoint(request: Request):
         return formatted_response
 
     except HTTPException as http_exc:
+        # Log specific for HTTP errors that are raised deliberately
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
@@ -394,6 +390,54 @@ async def analyze_thin_content_directly(request: ThinContentRequest):
     return {"message": "Análisis completado", "data": results}
 
 #######################################
+
+
+
+########### ANALYZE_404 ##########
+
+class DomainRequest(BaseModel):
+    domain: HttpUrl
+
+async def fetch_page(url: str, client: httpx.AsyncClient):
+    try:
+        response = await client.get(url)
+        if response.status_code == 404:
+            return None, 404
+        response.raise_for_status()
+        return response.text, response.status_code
+    except httpx.HTTPStatusError as e:
+        return None, e.response.status_code
+    except httpx.HTTPError:
+        return None, 500
+
+async def crawl_page(url: str, base_url: str, client: httpx.AsyncClient, visited: set):
+    if url in visited:
+        return []
+    visited.add(url)
+    content, status = await fetch_page(url, client)
+    results = [{"url": url, "status": status}]
+    if content is None:
+        return results
+
+    soup = BeautifulSoup(content, 'html.parser')
+    links = [link.get('href') for link in soup.find_all('a', href=True)]
+    internal_links = {urljoin(base_url, link) for link in links if link and (link.startswith('/') or base_url in link)}
+
+    tasks = [crawl_page(link, base_url, client, visited) for link in internal_links]
+    crawled_pages = await asyncio.gather(*tasks)
+    for page in crawled_pages:
+        results.extend(page)
+    return results
+
+@app.post("/check-domain/")
+async def check_domain(request: DomainRequest):
+    base_url = request.domain.rstrip('/')
+    visited = set()
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        results = await crawl_page(base_url, base_url, client, visited)
+        return results
+
+###################################
 
 
 ############ SEARCH_KEYWORDS #############
