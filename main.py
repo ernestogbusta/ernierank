@@ -85,7 +85,6 @@ async def process_urls_in_batches(request: BatchRequest):
     results = await asyncio.gather(*tasks)
     print(f"Results received: {results}")
 
-    # Cambio en el filtro para permitir resultados con main_keyword o secondary_keywords vacíos
     valid_results = [
         {
             "url": result['url'],
@@ -93,7 +92,8 @@ async def process_urls_in_batches(request: BatchRequest):
             "meta_description": result.get('meta_description', "No description provided"),
             "main_keyword": result.get('main_keyword', "Not specified"),
             "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified"),
+            "content": result.get('content', "")
         } for result in results if result
     ]
     print(f"Filtered results: {valid_results}")
@@ -319,7 +319,6 @@ class PageData(BaseModel):
 class ThinContentRequest(BaseModel):
     processed_urls: List[Dict[str, Any]]
 
-# Nuevo endpoint para analizar Thin Content
 @app.post("/analyze_thin_content")
 async def analyze_thin_content_endpoint(request: Request):
     try:
@@ -383,6 +382,40 @@ async def analyze_thin_content_directly(request: ThinContentRequest):
         except Exception as e:
             continue
     return {"message": "Análisis completado", "data": results}
+
+
+@app.post("/full_thin_content_analysis")
+async def full_thin_content_analysis(request: Request):
+    try:
+        request_data = await request.json()
+        
+        # Paso 1: Procesar las URLs en lotes
+        process_urls_response = await process_urls_in_batches(BatchRequest(**request_data))
+
+        # Verifica que la respuesta sea correcta y obtén los datos
+        if not process_urls_response:
+            raise HTTPException(status_code=500, detail="Error processing URLs in batches")
+
+        # Paso 2: Analizar el thin content usando los datos procesados
+        thin_content_request = ThinContentRequest(
+            processed_urls=process_urls_response["processed_urls"],
+            more_batches=process_urls_response["more_batches"],
+            next_batch_start=process_urls_response["next_batch_start"]
+        )
+        analyze_thin_content_response = await analyze_thin_content_endpoint(Request(scope={'type': 'http'}, receive=None, json=thin_content_request.dict))
+
+        # Verifica la respuesta y procesa los resultados
+        if isinstance(analyze_thin_content_response, JSONResponse):
+            thin_content_results = analyze_thin_content_response.body.decode('utf-8')
+            return JSONResponse(content=thin_content_results)
+        else:
+            raise HTTPException(status_code=500, detail="Error analyzing thin content")
+
+    except HTTPException as http_exc:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 #######################################
 
