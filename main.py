@@ -309,41 +309,6 @@ async def generate_content_endpoint(request: Request):
 
 ########### ANALYZE_THIN_CONTENT ##########
 
-# Configurando el logger
-
-class PageData(BaseModel):
-    url: HttpUrl
-    title: str
-    meta_description: Optional[str] = None
-    h1: Optional[str] = None
-    h2: Optional[List[str]] = []
-    main_keyword: Optional[str] = None
-    secondary_keywords: List[str]
-    semantic_search_intent: str
-
-    @validator('h1', 'meta_description', 'main_keyword', pre=True, always=True)
-    def ensure_not_empty(cls, v):
-        if v == "":
-            return None
-        return v
-
-    @validator('h2', pre=True, always=True)
-    def ensure_list(cls, v):
-        if v is None:
-            return []
-        return v
-
-class ThinContentRequest(BaseModel):
-    processed_urls: List[PageData]
-    more_batches: bool = False
-    next_batch_start: Optional[int] = None
-
-    @validator('processed_urls', each_item=True)
-    def check_urls(cls, v):
-        if not v.title or not v.url:
-            raise ValueError("URL and title must be provided for each item.")
-        return v
-
 @app.post("/analyze_thin_content")
 async def analyze_thin_content(request: ThinContentRequest):
     try:
