@@ -67,6 +67,7 @@ class BatchRequest(BaseModel):
     batch_size: int = 100  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
+
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     sitemap_url = f"{request.domain.rstrip('/')}/sitemap_index.xml"
@@ -162,6 +163,7 @@ async def fetch_individual_sitemap(client, sitemap_url):
         return []
 
     return []
+
 
 ############################################
 
@@ -320,20 +322,13 @@ class ThinContentRequest(BaseModel):
     processed_urls: List[Dict[str, Any]]
 
 @app.post("/analyze_thin_content")
-async def analyze_thin_content_endpoint(request: Request):
+async def analyze_thin_content_endpoint(request: ThinContentRequest):
     try:
-        request_data = await request.json()
-
-        try:
-            thin_request = ThinContentRequest(**request_data)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error parsing request data: {e}")
-
-        if not thin_request.processed_urls:
+        if not request.processed_urls:
             raise HTTPException(status_code=400, detail="No URLs provided")
 
         # Llamada correcta a la función analyze_thin_content del módulo
-        analysis_results = analyze_thin_content.analyze_thin_content(thin_request.processed_urls)
+        analysis_results = analyze_thin_content.analyze_thin_content(request.processed_urls)
 
         formatted_response = {
             "thin_content_pages": [
@@ -390,7 +385,8 @@ async def full_thin_content_analysis(request: Request):
         request_data = await request.json()
         
         # Paso 1: Procesar las URLs en lotes
-        process_urls_response = await process_urls_in_batches(BatchRequest(**request_data))
+        batch_request = BatchRequest(**request_data)
+        process_urls_response = await process_urls_in_batches(batch_request)
 
         # Verifica que la respuesta sea correcta y obtén los datos
         if not process_urls_response:
@@ -398,18 +394,12 @@ async def full_thin_content_analysis(request: Request):
 
         # Paso 2: Analizar el thin content usando los datos procesados
         thin_content_request = ThinContentRequest(
-            processed_urls=process_urls_response["processed_urls"],
-            more_batches=process_urls_response["more_batches"],
-            next_batch_start=process_urls_response["next_batch_start"]
+            processed_urls=process_urls_response["processed_urls"]
         )
-        analyze_thin_content_response = await analyze_thin_content_endpoint(Request(scope={'type': 'http'}, receive=None, json=thin_content_request.dict))
+        analyze_thin_content_response = await analyze_thin_content_endpoint(thin_content_request)
 
         # Verifica la respuesta y procesa los resultados
-        if isinstance(analyze_thin_content_response, JSONResponse):
-            thin_content_results = analyze_thin_content_response.body.decode('utf-8')
-            return JSONResponse(content=thin_content_results)
-        else:
-            raise HTTPException(status_code=500, detail="Error analyzing thin content")
+        return analyze_thin_content_response
 
     except HTTPException as http_exc:
         raise
