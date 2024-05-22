@@ -108,21 +108,17 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(sitemap_url):
+async def fetch_sitemap(client: httpx.AsyncClient, sitemap_url: str) -> list:
     try:
-        response = requests.get(sitemap_url, allow_redirects=True)
+        response = await client.get(sitemap_url)
         if response.status_code == 200:
-            root = ET.fromstring(response.text)
-            return [url.text for url in root.findall(".//loc")]
-        elif response.status_code in (301, 302):
-            redirect_url = response.headers.get('Location')
-            print(f"Redirecting to {redirect_url}")
-            return await fetch_sitemap(redirect_url)
+            soup = BeautifulSoup(response.content, 'xml')
+            urls = [loc.text for loc in soup.find_all('loc')]
+            return urls
         else:
-            print(f"Error fetching {sitemap_url}: {response.status_code}")
             return []
     except Exception as e:
-        print(f"Exception fetching {sitemap_url}: {str(e)}")
+        logging.error(f"Error fetching sitemap: {e}")
         return []
 
 async def fetch_individual_sitemap(client, sitemap_url):
