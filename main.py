@@ -66,6 +66,7 @@ class BatchRequest(BaseModel):
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 
+
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     domain = request.domain
@@ -78,7 +79,7 @@ async def process_urls_in_batches(request: BatchRequest):
 
     if not urls:
         print("No URLs found in the sitemap.")
-        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
+        return {"detail": "¡No hay sitemap! Antes de todo debes crear un sitemap para poder indexar tus URLs correctamente y optimizar el SEO de tu sitio web"}
     
     print(f"Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
@@ -116,10 +117,8 @@ async def fetch_sitemap(client, base_url):
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
         "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
     }
-    # Asegurarse de que la base URL es correcta, eliminando cualquier ruta adicional incorrectamente añadida
     base_url = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
-
-    sitemap_paths = ['/sitemap_index.xml', '/sitemap.xml', '/sitemap1.xml']  # Diferentes endpoints de sitemap comunes
+    sitemap_paths = ['/sitemap_index.xml', '/sitemap.xml', '/sitemap1.xml']
     all_urls = []
 
     for path in sitemap_paths:
@@ -127,18 +126,16 @@ async def fetch_sitemap(client, base_url):
         try:
             response = await client.get(url, headers=headers)
             if response.status_code == 404:
-                continue  # Si no se encuentra el sitemap en esta ruta, intenta con la siguiente
+                continue
             response.raise_for_status()
             sitemap_contents = xmltodict.parse(response.content)
 
-            # Procesando sitemap index
             if 'sitemapindex' in sitemap_contents:
                 sitemap_indices = sitemap_contents['sitemapindex'].get('sitemap', [])
                 sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
                 for sitemap in sitemap_indices:
                     sitemap_url = sitemap['loc']
                     all_urls.extend(await fetch_individual_sitemap(client, sitemap_url))
-            # Procesando urlset directamente si está presente
             elif 'urlset' in sitemap_contents:
                 all_urls.extend([url['loc'] for url in sitemap_contents['urlset']['url']])
         except Exception as e:
@@ -165,6 +162,10 @@ async def fetch_individual_sitemap(client, sitemap_url):
         return []
 
     return []
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=10000, log_level="debug")
 
 
 ############################################
