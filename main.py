@@ -32,6 +32,10 @@ from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import PolynomialFeatures
 import numpy as np
 import sys
+import random
+import gzip
+from requests.exceptions import HTTPError, RequestException
+import aiohttp
 
 app = FastAPI(title="ErnieRank API")
 
@@ -39,12 +43,15 @@ app = FastAPI(title="ErnieRank API")
 async def startup_event():
     app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
     if not app.state.openai_api_key:
-        logger.critical("OPENAI_API_KEY environment variable not set. Set this variable and restart the application.")
         print("Failed to detect OPENAI_API_KEY:", app.state.openai_api_key, file=sys.stderr)
         raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
     else:
         print("OPENAI_API_KEY detected successfully:", app.state.openai_api_key, file=sys.stderr)
-    app.state.client = httpx.AsyncClient()
+    
+    # ⚡️ Nueva configuración: TIMEOUTS largos + límites de conexiones + sólo HTTP/1.1
+    timeout = httpx.Timeout(60.0, connect=60.0, read=60.0, write=60.0, pool=60.0)
+    limits = httpx.Limits(max_connections=5, max_keepalive_connections=2)
+    app.state.client = httpx.AsyncClient(http1=True, http2=False, timeout=timeout, limits=limits)
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -66,26 +73,64 @@ class BatchRequest(BaseModel):
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
 
-
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
-    domain = request.domain
-    if not domain.startswith("http://") and not domain.startswith("https://"):
-        domain = f"https://{domain}"
-    
-    sitemap_url = f"{domain.rstrip('/')}/sitemap_index.xml"
-    print(f"Fetching URLs from: {sitemap_url}")
-    urls = await fetch_sitemap(app.state.client, sitemap_url)
+    domain = request.domain.rstrip('/')
+    print(f"Fetching URLs from domain: {domain}")
+    urls = await fetch_sitemap(app.state.client, domain)
 
     if not urls:
         print("No URLs found in the sitemap.")
-        return {"detail": "¡No hay sitemap! Antes de todo debes crear un sitemap para poder indexar tus URLs correctamente y optimizar el SEO de tu sitio web"}
+        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
     
-    print(f"Total URLs fetched for processing: {len(urls)}")
+    print(f"✅ Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
-    print(f"URLs to process from index {request.start} to {request.start + request.batch_size}: {urls_to_process}")
+    print(f"➡️ URLs to process from index {request.start} to {request.start + request.batch_size}")
 
-    tasks = [analyze_url(url, app.state.client) for url in urls_to_process]
+    # ⚡ Limitador de concurrencia
+    semaphore = asyncio.Semaphore(5)  # Máximo 5 conexiones simultáneas para evitar desconexiones por server
+
+async def sem_analyze_url(url):
+    async with semaphore:
+        try:
+            result = await retry_analyze_url(url, app.state.client)
+            await asyncio.sleep(2)  # 💤 Añadimos 2 segundos de espera entre peticiones
+            return result
+        except Exception as e:
+            print(f"❌ Error procesando {url}: {e}")
+            return None
+
+    print(f"✅ Results received for batch: {len([r for r in results if r])} successful, {len(results) - len([r for r in results if r])} failed.")
+
+    valid_results = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "meta_description": result.get('meta_description', "No description provided"),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "secondary_keywords": result.get('secondary_keywords', []),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified"),
+            "content": result.get('content', "")
+        }
+        for result in results if result
+    ]
+    print(f"✅ Filtered valid results: {len(valid_results)}")
+
+    next_start = request.start + len(urls_to_process)
+    more_batches = next_start < len(urls)
+    print(f"🔄 More batches pending: {more_batches} | Next batch start index: {next_start}")
+
+    return {
+        "processed_urls": valid_results,
+        "more_batches": more_batches,
+        "next_batch_start": next_start if more_batches else None
+    }
+
+async def sem_analyze_url(url):
+    async with semaphore:
+        return await retry_analyze_url(url, app.state.client)
+
+    tasks = [sem_analyze_url(url) for url in urls_to_process]
     results = await asyncio.gather(*tasks)
     print(f"Results received: {results}")
 
@@ -98,7 +143,8 @@ async def process_urls_in_batches(request: BatchRequest):
             "secondary_keywords": result.get('secondary_keywords', []),
             "semantic_search_intent": result.get('semantic_search_intent', "Not specified"),
             "content": result.get('content', "")
-        } for result in results if result
+        }
+        for result in results if result
     ]
     print(f"Filtered results: {valid_results}")
 
@@ -112,60 +158,213 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else None
     }
 
-async def fetch_sitemap(client, base_url):
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
-        "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
-    }
-    base_url = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
-    sitemap_paths = ['/sitemap_index.xml', '/sitemap.xml', '/sitemap1.xml']
-    all_urls = []
+async def find_sitemaps_in_html(client: httpx.AsyncClient, base_domain: str, headers: dict):
+    try:
+        response = await client.get(base_domain, headers=headers, timeout=30)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            sitemap_urls = [
+                urljoin(base_domain, a['href'])
+                for a in soup.find_all('a', href=True)
+                if 'sitemap' in a['href'] and a['href'].endswith(('.xml', '.gz'))
+            ]
+            urls_collected = set()
+            for sitemap_url in sitemap_urls:
+                urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)  # ⚡ Aquí estaba mal: ahora correcto
+                if urls:
+                    urls_collected.update(urls)
+            return urls_collected
+    except Exception as e:
+        print(f"⚠️ Error buscando sitemaps en HTML {base_domain}: {e}")
+    return set()
 
-    for path in sitemap_paths:
-        url = f"{base_url.rstrip('/')}{path}"
+async def fetch_with_retry(client, url, headers, retries=3, delay=5):
+    for attempt in range(1, retries + 1):
         try:
-            response = await client.get(url, headers=headers)
-            if response.status_code == 404:
-                continue
+            logger.info(f"🌎 Intento {attempt}: Fetching {url}")
+            response = await client.get(url, headers=headers, timeout=30)
             response.raise_for_status()
-            sitemap_contents = xmltodict.parse(response.content)
-
-            if 'sitemapindex' in sitemap_contents:
-                sitemap_indices = sitemap_contents['sitemapindex'].get('sitemap', [])
-                sitemap_indices = sitemap_indices if isinstance(sitemap_indices, list) else [sitemap_indices]
-                for sitemap in sitemap_indices:
-                    sitemap_url = sitemap['loc']
-                    all_urls.extend(await fetch_individual_sitemap(client, sitemap_url))
-            elif 'urlset' in sitemap_contents:
-                all_urls.extend([url['loc'] for url in sitemap_contents['urlset']['url']])
+            logger.info(f"✅ Success: {url}")
+            return response
+        except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
+            logger.warning(f"⚠️ Error {e} in {url}. Retrying in {delay} seconds...")
+            await asyncio.sleep(delay)
         except Exception as e:
-            print(f"Error fetching or parsing sitemap from {url}: {str(e)}")
+            logger.error(f"❌ Fatal error fetching {url}: {e}")
+            break
+    logger.error(f"🛑 Failed after {retries} attempts: {url}")
+    return None
 
-    if not all_urls:
-        print("No sitemaps found at any known locations.")
-        return None
-    return all_urls
-
-async def fetch_individual_sitemap(client, sitemap_url):
+async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36",
-        "Accept": "application/xml, application/xhtml+xml, text/html, application/json; q=0.9, */*; q=0.8"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/xml,text/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive"
+    }
+
+    base_domain = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
+    sitemap_candidates = [
+        f"{base_domain}/sitemap_index.xml",
+        f"{base_domain}/sitemap.xml",
+        f"{base_domain}/sitemap1.xml",
+        f"{base_domain}/sitemap.xml.gz"
+    ]
+
+    collected_urls = set()
+
+    # Intentar con los sitemaps típicos
+    for sitemap_url in sitemap_candidates:
+        urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)  # ✅ Correcto aquí
+        if urls:
+            collected_urls.update(urls)
+            break
+
+    # Si no funcionaron, intentar descubrir en robots.txt
+    if not collected_urls:
+        robots_sitemaps = await discover_sitemaps_from_robots_txt(client, base_domain)
+        for sitemap_url in robots_sitemaps:
+            urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)  # ✅ Correcto aquí
+            if urls:
+                collected_urls.update(urls)
+
+    # Si todavía no hay resultados, buscar en el HTML principal
+    if not collected_urls:
+        urls = await find_sitemaps_in_html(client, base_domain, headers)
+        collected_urls.update(urls)
+
+    if not collected_urls:
+        print(f"🚫 No se encontraron URLs en {base_domain}")
+        return None
+
+    print(f"✅ Total URLs encontradas: {len(collected_urls)}")
+    return list(collected_urls)
+
+async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: str, headers: dict, retries: int = 3) -> list:
+    for attempt in range(retries):
+        try:
+            response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
+            if response.status_code == 200:
+                return await parse_sitemap(response, sitemap_url, client)
+        except (httpx.RequestError, httpx.RemoteProtocolError) as e:
+            print(f"⚠️ Error de conexión {sitemap_url}: {e} (Intento {attempt+1}/{retries})")
+            await asyncio.sleep(2 * (attempt + 1))
+        except Exception as e:
+            print(f"❌ Error inesperado {sitemap_url}: {e}")
+            break
+    return []
+
+async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient):
+    try:
+        content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
+        data = xmltodict.parse(content)
+
+        if 'urlset' in data:
+            urls = data['urlset'].get('url', [])
+            if isinstance(urls, dict):
+                urls = [urls]
+            return [entry['loc'] for entry in urls if 'loc' in entry]
+
+        elif 'sitemapindex' in data:
+            nested = data['sitemapindex'].get('sitemap', [])
+            if isinstance(nested, dict):
+                nested = [nested]
+            all_nested_urls = []
+            for sitemap in nested:
+                loc = sitemap.get('loc')
+                if loc:
+                    nested_urls = await fetch_individual_sitemap(client, loc)
+                    if nested_urls:
+                        all_nested_urls.extend(nested_urls)
+            return all_nested_urls
+    except Exception as e:
+        print(f"⚠️ Error parseando sitemap {sitemap_url}: {e}")
+        return []
+
+async def fetch_individual_sitemap(client: httpx.AsyncClient, sitemap_url: str) -> list:
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/xml,text/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
     }
     try:
-        response = await client.get(sitemap_url, headers=headers)
-        response.raise_for_status()
-        sitemap_contents = xmltodict.parse(response.content)
-        if 'urlset' in sitemap_contents:
-            return [url['loc'] for url in sitemap_contents['urlset']['url']]
+        response = await client.get(sitemap_url, headers=headers, timeout=30)
+        if response.status_code == 200:
+            content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
+            data = xmltodict.parse(content)
+
+            if 'urlset' in data:
+                urls = data['urlset'].get('url', [])
+                if isinstance(urls, dict):
+                    urls = [urls]
+                return [entry['loc'] for entry in urls if 'loc' in entry]
+
+            elif 'sitemapindex' in data:
+                nested = data['sitemapindex'].get('sitemap', [])
+                if isinstance(nested, dict):
+                    nested = [nested]
+                all_nested_urls = []
+                for sitemap in nested:
+                    loc = sitemap.get('loc')
+                    if loc:
+                        nested_urls = await fetch_individual_sitemap(client, loc)
+                        if nested_urls:
+                            all_nested_urls.extend(nested_urls)
+                return all_nested_urls
     except Exception as e:
-        print(f"Error fetching or parsing individual sitemap from {sitemap_url}: {str(e)}")
-        return []
+        print(f"⚠️ Error descargando o parseando sitemap individual {sitemap_url}: {e}")
 
     return []
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=10000, log_level="debug")
+async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_domain: str) -> list:
+    robots_url = f"{base_domain}/robots.txt"
+    discovered = []
+
+    try:
+        response = await client.get(robots_url, timeout=10)
+        if response.status_code == 200:
+            lines = response.text.splitlines()
+            for line in lines:
+                if line.lower().startswith('sitemap:'):
+                    sitemap_url = line.split(':', 1)[1].strip()
+                    discovered.append(sitemap_url)
+    except Exception as e:
+        print(f"⚠️ Error leyendo robots.txt en {robots_url}: {e}")
+
+    return discovered
+
+async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 2.0):
+    """
+    Intenta analizar una URL varias veces con reintentos y backoff exponencial si falla.
+    Se añade delay entre intentos para no saturar servidores como Webempresa.
+    """
+    delay = initial_delay
+    for attempt in range(1, max_retries + 1):
+        try:
+            result = await analyze_url(url, client)
+            if result:
+                return result
+            else:
+                print(f"⚠️ Resultado vacío para {url} en intento {attempt}/{max_retries}. Retrying...")
+        except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
+            print(f"⚠️ Error de conexión analizando {url} en intento {attempt}/{max_retries}: {e}")
+        except Exception as e:
+            print(f"❌ Error inesperado analizando {url}: {e}")
+            return None
+        
+        # 💤 Espera antes de reintentar
+        await asyncio.sleep(delay)
+        delay *= 1.5  # Pequeño backoff incremental (1.5x cada vez)
+
+    print(f"🛑 Fallo definitivo: {url} después de {max_retries} intentos.")
+    return None
 
 
 ############################################
@@ -464,44 +663,83 @@ def adjust_volume(trends_volume):
 # Configuración inicial de pytrends
 pytrends = TrendReq(hl='es-ES', tz=360)
 
-class KeywordRequest(BaseModel):
-    topic: str
-
-async def fetch_google_search_results(topic, max_attempts=5):
+async def fetch_google_search_results(topic, max_attempts=10):
     attempts = 0
     while attempts < max_attempts:
         try:
             pytrends.build_payload([topic])
             related_queries = pytrends.related_queries()
             return process_related_queries(related_queries, topic)
-        except Exception as e:
+        
+        except HTTPError as http_err:
+            if http_err.response.status_code == 429:
+                attempts += 1
+                sleep_time = (2 ** attempts) * 5
+                await asyncio.sleep(sleep_time * random.uniform(1.5, 2))
+            else:
+                raise HTTPException(status_code=http_err.response.status_code, detail="HTTP error occurred.")
+        
+        except RequestException as e:  # Captura de errores relacionados con peticiones HTTP
             attempts += 1
-            sleep_time = (2 ** attempts) * 5  # Tiempo de espera exponencial con base 5 segundos
-            await asyncio.sleep(sleep_time)
+            sleep_time = (2 ** attempts) * 5
+            await asyncio.sleep(sleep_time * random.uniform(1.5, 2))
+            
             if attempts == max_attempts:
-                raise HTTPException(status_code=429, detail="Google Trends rate limit exceeded")
+                raise HTTPException(status_code=500, detail=f"Max retries exceeded. Google Trends error: {str(e)}")
+    
+    raise HTTPException(status_code=500, detail="Could not retrieve Google Trends data after max attempts.")
+
+
+def get_cached_keywords(topic):
+    # Función de ejemplo que devuelve keywords cacheadas
+    # Deberías implementar tu propia lógica para obtener keywords predefinidas o desde un caché
+    cached_keywords = {
+        "marketing": [{"keyword": "marketing digital", "volume": 12000}, {"keyword": "estrategias de marketing", "volume": 9500}],
+        "tecnología": [{"keyword": "inteligencia artificial", "volume": 13000}, {"keyword": "nuevas tecnologías", "volume": 9000}],
+    }
+    return cached_keywords.get(topic, [])
 
 @app.post("/search_keywords")
 async def search_keywords(request: KeywordRequest):
-    google_results = await fetch_google_search_results(request.topic)
+    try:
+        # Intentar obtener resultados desde Google Trends
+        google_results = await fetch_google_search_results(request.topic)
+    except HTTPException as e:
+        # Si Google Trends falla, usa datos cacheados como fallback
+        google_results = get_cached_keywords(request.topic)
+        if not google_results:
+            raise HTTPException(status_code=404, detail="No keywords found in Google Trends or cache.")
+    
     if not google_results:
-        raise HTTPException(status_code=404, detail="No keywords found")
+        raise HTTPException(status_code=404, detail="No keywords found.")
+    
     return {"keywords": google_results}
+
+
+scaling_factor = 14800 / 100  # Suponiendo que 100 es el máximo de Trends para 'Digital Marketing'
 
 def process_related_queries(related_queries, topic):
     keywords = []
-    scaling_factor = 14800 / 100  # Suponiendo que 100 es el máximo de Trends para 'Digital Marketing'
     excluded_words = ['la', 'el', 'los', 'las']
 
-    if topic in related_queries:
-        related_data = related_queries[topic]
-        for data_type in ['top', 'rising']:
-            if related_data.get(data_type) is not None:
-                for query in related_data[data_type].to_dict('records'):
-                    if not any(excluded_word in query['query'].split() for excluded_word in excluded_words):
-                        trends_volume = query['value'] * scaling_factor
+    if not related_queries or topic not in related_queries:
+        raise HTTPException(status_code=404, detail="No related queries found for the topic.")
+    
+    related_data = related_queries.get(topic, {})
+    if not related_data:  # Verificar si los datos relacionados están presentes
+        raise HTTPException(status_code=404, detail="No related data found for the topic.")
+    
+    for data_type in ['top', 'rising']:
+        if related_data.get(data_type) is not None:
+            for query in related_data[data_type].to_dict('records'):
+                if not any(excluded_word in query['query'].split() for excluded_word in excluded_words):
+                    trends_volume = query['value'] * scaling_factor
+                    if trends_volume > 0:
                         scaled_volume = adjust_volume(trends_volume)
-                        keywords.append({"keyword": query['query'], "volume": scaled_volume})
+                    else:
+                        scaled_volume = 0
+                    keywords.append({"keyword": query['query'], "volume": scaled_volume})
+
     return keywords
 
 
