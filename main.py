@@ -213,6 +213,20 @@ async def sem_analyze_url(url):
         "next_batch_start": next_start if more_batches else None
     }
 
+async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: str, headers: dict, retries: int = 3) -> list:
+    for attempt in range(retries):
+        try:
+            response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
+            if response.status_code == 200:
+                return await parse_sitemap(response, sitemap_url, client, headers)
+        except (httpx.RequestError, httpx.RemoteProtocolError) as e:
+            print(f"⚠️ Error de conexión en {sitemap_url}: {e} (Intento {attempt+1}/{retries})")
+            await asyncio.sleep(2 * (attempt + 1))
+        except Exception as e:
+            print(f"❌ Error inesperado en {sitemap_url}: {e}")
+            break
+    return []
+
 async def find_sitemaps_in_html(client: httpx.AsyncClient, base_domain: str, headers: dict):
     try:
         response = await client.get(base_domain, headers=headers, timeout=30)
@@ -252,11 +266,7 @@ async def fetch_with_retry(client, url, headers, retries=3, delay=5):
 
 async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2_1) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/123.0.0.0 Safari/537.36"
-        ),
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         "Accept": "application/xml,text/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive"
@@ -272,12 +282,14 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 
     collected_urls = set()
 
+    # 1. Probar los candidatos conocidos
     for sitemap_url in sitemap_candidates:
         urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)
         if urls:
             collected_urls.update(urls)
-            break
+            break  # ✅ Si uno funciona, no sigas probando los demás
 
+    # 2. Buscar en robots.txt si no encontró antes
     if not collected_urls:
         robots_sitemaps = await discover_sitemaps_from_robots_txt(client, base_domain, headers)
         for sitemap_url in robots_sitemaps:
@@ -285,6 +297,7 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
             if urls:
                 collected_urls.update(urls)
 
+    # 3. Buscar en la home HTML
     if not collected_urls:
         urls = await find_sitemaps_in_html(client, base_domain, headers)
         collected_urls.update(urls)
@@ -295,20 +308,6 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 
     print(f"✅ Total URLs encontradas: {len(collected_urls)}")
     return list(collected_urls)
-
-async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: str, headers: dict, retries: int = 3) -> list:
-    for attempt in range(retries):
-        try:
-            response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
-            if response.status_code == 200:
-                return await parse_sitemap(response, sitemap_url, client, headers)
-        except (httpx.RequestError, httpx.RemoteProtocolError) as e:
-            print(f"⚠️ Error de conexión {sitemap_url}: {e} (Intento {attempt+1}/{retries})")
-            await asyncio.sleep(2 * (attempt + 1))
-        except Exception as e:
-            print(f"❌ Error inesperado {sitemap_url}: {e}")
-            break
-    return []
 
 async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient, headers: dict):
     try:
@@ -379,6 +378,8 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
                 if line.lower().startswith('sitemap:'):
                     sitemap_url = line.split(':', 1)[1].strip()
                     discovered.append(sitemap_url)
+        else:
+            print(f"⚠️ No se pudo acceder a robots.txt en {robots_url}")
     except Exception as e:
         print(f"⚠️ Error leyendo robots.txt en {robots_url}: {e}")
 
