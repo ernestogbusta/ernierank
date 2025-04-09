@@ -106,6 +106,48 @@ async def process_urls_in_batches(request: BatchRequest):
         async with semaphore:
             try:
                 result = await retry_analyze_url(url, app.state.client)
+                await asyncio.sleep(2)  # 💤 Espera de 2 segundos entre peticiones para evitar baneos
+                return result
+            except Exception as e:
+                print(f"❌ Error procesando {url}: {e}")
+                return None
+
+    tasks = [sem_analyze_url(url) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
+
+    print(f"✅ Results received for batch: {len([r for r in results if r])} successful, {len(results) - len([r for r in results if r])} failed.")
+
+    valid_results = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "meta_description": result.get('meta_description', "No description provided"),
+            "slug": urlparse(result['url']).path,
+            "h1_tags": result.get('h1_tags', []),
+            "h2_tags": result.get('h2_tags', []),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "secondary_keywords": result.get('secondary_keywords', []),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+        }
+        for result in results if result
+    ]
+
+    next_start = request.start + len(urls_to_process)
+    more_batches = next_start < len(urls)
+
+    print(f"🔄 More batches pending: {more_batches} | Next batch start index: {next_start}")
+
+    return {
+        "processed_urls": valid_results,
+        "more_batches": more_batches,
+        "next_batch_start": next_start if more_batches else 0
+    }
+
+
+    async def sem_analyze_url(url):
+        async with semaphore:
+            try:
+                result = await retry_analyze_url(url, app.state.client)
                 await asyncio.sleep(2)  # 💤 Añadir espera para evitar bloqueos
                 return result
             except Exception as e:
@@ -388,7 +430,6 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
 async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 2.0):
     """
     Intenta analizar una URL varias veces con reintentos y backoff exponencial si falla.
-    Se añade delay entre intentos para no saturar servidores como Webempresa.
     """
     delay = initial_delay
     for attempt in range(1, max_retries + 1):
@@ -406,7 +447,7 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
         
         # 💤 Espera antes de reintentar
         await asyncio.sleep(delay)
-        delay *= 1.5  # Pequeño backoff incremental (1.5x cada vez)
+        delay *= 1.5  # Aumenta progresivamente el tiempo de espera
 
     print(f"🛑 Fallo definitivo: {url} después de {max_retries} intentos.")
     return None
