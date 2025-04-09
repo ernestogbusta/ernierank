@@ -43,27 +43,27 @@ app = FastAPI(title="ErnieRank API")
 async def startup_event():
     app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
     if not app.state.openai_api_key:
-        print("Failed to detect OPENAI_API_KEY:", app.state.openai_api_key, file=sys.stderr)
+        print("Failed to detect OPENAI_API_KEY:", file=sys.stderr)
         raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
     else:
-        print("OPENAI_API_KEY detected successfully:", app.state.openai_api_key, file=sys.stderr)
+        print("OPENAI_API_KEY detected successfully.", file=sys.stderr)
 
-    # Configuración ultra "humana" y "desbotizada"
-    timeout = httpx.Timeout(90.0, connect=90.0, read=90.0, write=90.0, pool=90.0)
+    timeout = httpx.Timeout(30.0, connect=10.0, read=20.0, write=10.0, pool=20.0)
+    limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Connection": "keep-alive",
+    }
+
     app.state.client = httpx.AsyncClient(
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-            "Connection": "close"  # 👈 Esto es clave: no mantener conexión abierta
-        },
+        http1=True,
         timeout=timeout,
-        limits=httpx.Limits(
-            max_connections=1,  # 👈 Importantísimo: solo 1 conexión simultánea
-            max_keepalive_connections=0  # 👈 Sin conexiones keep-alive
-        ),
-        http1=True,  # 👈 Sólo HTTP/1.1
-        http2=False
+        limits=limits,
+        headers=headers,  # 👉 Ahora SIEMPRE va como navegador
+        follow_redirects=True
     )
 
 @app.on_event("shutdown")
