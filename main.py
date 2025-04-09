@@ -253,7 +253,7 @@ async def fetch_with_retry(client, url, headers, retries=3, delay=5):
 async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2_1) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/123.0.0.0 Safari/537.36"
         ),
@@ -272,22 +272,19 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 
     collected_urls = set()
 
-    # Intentar con los sitemaps típicos
     for sitemap_url in sitemap_candidates:
-        urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)  # ✅ Correcto aquí
+        urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)
         if urls:
             collected_urls.update(urls)
             break
 
-    # Si no funcionaron, intentar descubrir en robots.txt
     if not collected_urls:
-        robots_sitemaps = await discover_sitemaps_from_robots_txt(client, base_domain)
+        robots_sitemaps = await discover_sitemaps_from_robots_txt(client, base_domain, headers)
         for sitemap_url in robots_sitemaps:
-            urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)  # ✅ Correcto aquí
+            urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)
             if urls:
                 collected_urls.update(urls)
 
-    # Si todavía no hay resultados, buscar en el HTML principal
     if not collected_urls:
         urls = await find_sitemaps_in_html(client, base_domain, headers)
         collected_urls.update(urls)
@@ -304,7 +301,7 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
         try:
             response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
             if response.status_code == 200:
-                return await parse_sitemap(response, sitemap_url, client)
+                return await parse_sitemap(response, sitemap_url, client, headers)
         except (httpx.RequestError, httpx.RemoteProtocolError) as e:
             print(f"⚠️ Error de conexión {sitemap_url}: {e} (Intento {attempt+1}/{retries})")
             await asyncio.sleep(2 * (attempt + 1))
@@ -313,7 +310,7 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
             break
     return []
 
-async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient):
+async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient, headers: dict):
     try:
         content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
         data = xmltodict.parse(content)
@@ -332,7 +329,7 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
             for sitemap in nested:
                 loc = sitemap.get('loc')
                 if loc:
-                    nested_urls = await fetch_individual_sitemap(client, loc)
+                    nested_urls = await fetch_individual_sitemap(client, loc, headers)
                     if nested_urls:
                         all_nested_urls.extend(nested_urls)
             return all_nested_urls
@@ -340,15 +337,7 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
         print(f"⚠️ Error parseando sitemap {sitemap_url}: {e}")
         return []
 
-async def fetch_individual_sitemap(client: httpx.AsyncClient, sitemap_url: str) -> list:
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/123.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/xml,text/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
-    }
+async def fetch_individual_sitemap(client: httpx.AsyncClient, sitemap_url: str, headers: dict) -> list:
     try:
         response = await client.get(sitemap_url, headers=headers, timeout=30)
         if response.status_code == 200:
@@ -369,7 +358,7 @@ async def fetch_individual_sitemap(client: httpx.AsyncClient, sitemap_url: str) 
                 for sitemap in nested:
                     loc = sitemap.get('loc')
                     if loc:
-                        nested_urls = await fetch_individual_sitemap(client, loc)
+                        nested_urls = await fetch_individual_sitemap(client, loc, headers)
                         if nested_urls:
                             all_nested_urls.extend(nested_urls)
                 return all_nested_urls
@@ -378,12 +367,12 @@ async def fetch_individual_sitemap(client: httpx.AsyncClient, sitemap_url: str) 
 
     return []
 
-async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_domain: str) -> list:
+async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_domain: str, headers: dict) -> list:
     robots_url = f"{base_domain}/robots.txt"
     discovered = []
 
     try:
-        response = await client.get(robots_url, timeout=10)
+        response = await client.get(robots_url, headers=headers, timeout=10)
         if response.status_code == 200:
             lines = response.text.splitlines()
             for line in lines:
