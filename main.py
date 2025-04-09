@@ -81,14 +81,69 @@ async def process_urls_in_batches(request: BatchRequest):
 
     if not urls:
         print("No URLs found in the sitemap.")
-        raise HTTPException(status_code=404, detail="Sitemap not found or empty")
+        return {
+            "processed_urls": [],
+            "more_batches": False,
+            "next_batch_start": 0
+        }
     
     print(f"✅ Total URLs fetched for processing: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
     print(f"➡️ URLs to process from index {request.start} to {request.start + request.batch_size}")
 
+    if not urls_to_process:
+        print("No URLs to process in this batch.")
+        return {
+            "processed_urls": [],
+            "more_batches": False,
+            "next_batch_start": 0
+        }
+
     # ⚡ Limitador de concurrencia
-    semaphore = asyncio.Semaphore(5)  # Máximo 5 conexiones simultáneas para evitar desconexiones por server
+    semaphore = asyncio.Semaphore(5)
+
+    async def sem_analyze_url(url):
+        async with semaphore:
+            try:
+                result = await retry_analyze_url(url, app.state.client)
+                await asyncio.sleep(2)  # 💤 Añadir espera para evitar bloqueos
+                return result
+            except Exception as e:
+                print(f"❌ Error procesando {url}: {e}")
+                return None
+
+    tasks = [sem_analyze_url(url) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
+
+    print(f"✅ Results received for batch: {len([r for r in results if r])} successful, {len(results) - len([r for r in results if r])} failed.")
+
+    valid_results = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "meta_description": result.get('meta_description', "No description provided"),
+            "slug": urlparse(result['url']).path,
+            "h1_tags": result.get('h1_tags', []),
+            "h2_tags": result.get('h2_tags', []),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "secondary_keywords": result.get('secondary_keywords', []),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+        }
+        for result in results if result
+    ]
+
+    next_start = request.start + len(urls_to_process)
+    more_batches = next_start < len(urls)
+
+    print(f"🔄 More batches pending: {more_batches} | Next batch start index: {next_start}")
+
+    return {
+        "processed_urls": valid_results,
+        "more_batches": more_batches,
+        "next_batch_start": next_start if more_batches else 0
+    }
+
+
 
 async def sem_analyze_url(url):
     async with semaphore:
