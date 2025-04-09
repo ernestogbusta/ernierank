@@ -43,15 +43,28 @@ app = FastAPI(title="ErnieRank API")
 async def startup_event():
     app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
     if not app.state.openai_api_key:
-        print("Failed to detect OPENAI_API_KEY:", app.state.openai_api_key, file=sys.stderr)
+        print("Failed to detect OPENAI_API_KEY:", file=sys.stderr)
         raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
     else:
-        print("OPENAI_API_KEY detected successfully:", app.state.openai_api_key, file=sys.stderr)
+        print("OPENAI_API_KEY detected successfully.", file=sys.stderr)
+
+    timeout = httpx.Timeout(30.0, connect=10.0, read=20.0, write=10.0, pool=20.0)
+    limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
     
-    # ⚡️ Nueva configuración: TIMEOUTS largos + límites de conexiones + sólo HTTP/1.1
-    timeout = httpx.Timeout(60.0, connect=60.0, read=60.0, write=60.0, pool=60.0)
-    limits = httpx.Limits(max_connections=5, max_keepalive_connections=2)
-    app.state.client = httpx.AsyncClient(http1=True, http2=False, timeout=timeout, limits=limits)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Connection": "keep-alive",
+    }
+
+    app.state.client = httpx.AsyncClient(
+        http1=True,
+        timeout=timeout,
+        limits=limits,
+        headers=headers,  # 👉 Ahora SIEMPRE va como navegador
+        follow_redirects=True
+    )
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -77,30 +90,50 @@ class BatchRequest(BaseModel):
 async def process_urls_in_batches(request: BatchRequest):
     domain = request.domain.rstrip('/')
     print(f"Fetching URLs from domain: {domain}")
-    urls = await fetch_sitemap(app.state.client, domain)
-
-    if not urls:
-        print("No URLs found in the sitemap.")
-        return {
-            "processed_urls": [],
-            "more_batches": False,
-            "next_batch_start": 0
-        }
     
-    print(f"✅ Total URLs fetched for processing: {len(urls)}")
+    urls = await fetch_sitemap(app.state.client, domain)
+    if not urls:
+        print("🚫 No URLs found in sitemap.")
+        return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
+    
+    print(f"✅ Total URLs fetched: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
-    print(f"➡️ URLs to process from index {request.start} to {request.start + request.batch_size}")
-
     if not urls_to_process:
-        print("No URLs to process in this batch.")
-        return {
-            "processed_urls": [],
-            "more_batches": False,
-            "next_batch_start": 0
-        }
+        print("🚫 No URLs to process in this batch.")
+        return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
-    # ⚡ Limitador de concurrencia
     semaphore = asyncio.Semaphore(5)
+
+    async def safe_analyze(url):
+        async with semaphore:
+            return await retry_analyze_url(url, app.state.client)
+
+    tasks = [safe_analyze(url) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
+    
+    valid_results = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "meta_description": result.get('meta_description', "No description provided"),
+            "slug": urlparse(result['url']).path,
+            "h1_tags": result.get('h1_tags', []),
+            "h2_tags": result.get('h2_tags', []),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "secondary_keywords": result.get('secondary_keywords', []),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+        }
+        for result in results if result
+    ]
+
+    next_start = request.start + len(urls_to_process)
+    more_batches = next_start < len(urls)
+
+    return {
+        "processed_urls": valid_results,
+        "more_batches": more_batches,
+        "next_batch_start": next_start if more_batches else 0
+    }
 
     async def sem_analyze_url(url):
         async with semaphore:
@@ -354,6 +387,11 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient, headers: dict):
     try:
         content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
+        # Primera verificación rápida
+        if not content.lstrip().startswith(b"<"):
+            print(f"⚠️ No parece XML válido en {sitemap_url}")
+            return []
+
         data = xmltodict.parse(content)
 
         if 'urlset' in data:
@@ -374,6 +412,7 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
                     if nested_urls:
                         all_nested_urls.extend(nested_urls)
             return all_nested_urls
+
     except Exception as e:
         print(f"⚠️ Error parseando sitemap {sitemap_url}: {e}")
         return []
@@ -427,29 +466,29 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
 
     return discovered
 
-async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 2.0):
+async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 1.5):
     """
-    Intenta analizar una URL varias veces con reintentos y backoff exponencial si falla.
+    Reintenta analizar una URL varias veces con backoff exponencial si falla, usando headers de navegador.
     """
     delay = initial_delay
     for attempt in range(1, max_retries + 1):
         try:
+            print(f"🔄 Attempt {attempt} fetching: {url}")
             result = await analyze_url(url, client)
             if result:
                 return result
             else:
-                print(f"⚠️ Resultado vacío para {url} en intento {attempt}/{max_retries}. Retrying...")
-        except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
-            print(f"⚠️ Error de conexión analizando {url} en intento {attempt}/{max_retries}: {e}")
+                print(f"⚠️ Empty result for {url} attempt {attempt}")
+        except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            print(f"⚠️ Connection error on {url} at attempt {attempt}: {e}")
         except Exception as e:
-            print(f"❌ Error inesperado analizando {url}: {e}")
+            print(f"❌ Unexpected error on {url}: {e}")
             return None
         
-        # 💤 Espera antes de reintentar
         await asyncio.sleep(delay)
-        delay *= 1.5  # Aumenta progresivamente el tiempo de espera
+        delay *= 2  # Exponential backoff
 
-    print(f"🛑 Fallo definitivo: {url} después de {max_retries} intentos.")
+    print(f"🛑 Failed fetching {url} after {max_retries} retries.")
     return None
 
 
