@@ -132,12 +132,21 @@ async def safe_analyze(url, client, semaphore):
 
     concurrency = crawler_mode.get("concurrency", 10)
     sleep_between_requests = random.uniform(0.6, 0.9) if not crawler_mode["safe_mode"] else random.uniform(3.5, 6.0)
-    max_retries = 5  # 🚨 No 12. Máximo 5 intentos por URL para no eternizar el batch.
+    max_retries = 5
 
     async with semaphore:
         try:
             dynamic_headers = get_dynamic_headers()
-            result, error_type = await retry_analyze_url(url, client, max_retries=max_retries, custom_headers=dynamic_headers)
+            timeout_per_url = 15  # ⏱️ Máximo 15 segundos por URL
+            try:
+                result, error_type = await asyncio.wait_for(
+                    retry_analyze_url(url, client, max_retries=max_retries, custom_headers=dynamic_headers),
+                    timeout=timeout_per_url
+                )
+            except asyncio.TimeoutError:
+                print(f"⏰ Timeout individual: {url} tardó más de {timeout_per_url} segundos. Saltando URL.")
+                crawler_mode["error_counter"] += 1
+                return None
 
             if not result:
                 if error_type != "502":
@@ -266,7 +275,7 @@ async def full_process_domain(request: BatchRequest):
 async def process_urls_in_batches(request: BatchRequest):
     domain = request.domain.rstrip('/')
     print(f"🔎 Fetching URLs from domain: {domain}")
-    
+
     urls = await fetch_sitemap(app.state.client, domain) or []
 
     if not urls:
@@ -279,12 +288,16 @@ async def process_urls_in_batches(request: BatchRequest):
         print("🚫 No URLs to process in this batch.")
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
-    # ⚡ Aquí el ajuste importante
     concurrency = crawler_mode.get("concurrency", 10)
     semaphore = asyncio.Semaphore(concurrency)
 
-    tasks = [safe_analyze(url, app.state.client, semaphore) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
+    timeout_batch = 45  # ⏱️ Máximo 45 segundos para todo el batch
+    try:
+        tasks = [safe_analyze(url, app.state.client, semaphore) for url in urls_to_process]
+        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=timeout_batch)
+    except asyncio.TimeoutError:
+        print(f"⏰ Timeout de batch: más de {timeout_batch} segundos. Cortando procesamiento.")
+        results = []
 
     valid_results = [
         {
