@@ -53,10 +53,15 @@ async def startup_event():
         limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
         
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Accept": "*/*",
-            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+            "User-Agent": "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.184 Mobile Safari/537.36 "
+                          "(compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Encoding": "gzip",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
             "Connection": "keep-alive",
+            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
         }
 
         app.state.client = httpx.AsyncClient(
@@ -107,7 +112,7 @@ async def safe_analyze(url, client, semaphore):
         print(f"🌐 Nuevo dominio detectado: {domain}. Reiniciando contadores.")
 
     concurrency = crawler_mode.get("concurrency", 5)
-    sleep_between_requests = random.uniform(1, 3) if not crawler_mode["safe_mode"] else random.uniform(6, 9)
+    sleep_between_requests = random.uniform(1.5, 3.0) if not crawler_mode["safe_mode"] else random.uniform(5.0, 8.0)
     max_retries = 5 if not crawler_mode["safe_mode"] else 10
 
     async with semaphore:
@@ -245,11 +250,16 @@ async def fetch_with_retry(client, url, headers, retries=3, delay=5):
 
 async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Accept": "application/xml,text/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive"
-    }
+    "User-Agent": "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.184 Mobile Safari/537.36 "
+                  "(compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Encoding": "gzip",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Connection": "keep-alive",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+}
 
     base_domain = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
     sitemap_candidates = [
