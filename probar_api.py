@@ -6,7 +6,7 @@ import time
 api_url = "https://ernierank-vd20.onrender.com/process_urls_in_batches"
 
 # Configura el dominio que quieres analizar
-domain = "https://aulacm.com/"
+domain = "https://ernestogbustamante.com/"
 
 # Cabeceras HTTP necesarias
 headers = {
@@ -55,7 +55,7 @@ while True:
     time.sleep(2)
 
 # Guardar todos los resultados en un archivo JSON
-output_filename = "resultados_aulacm.json"
+output_filename = "resultados_rastreo.json"
 with open(output_filename, "w", encoding="utf-8") as f:
     json.dump(all_results, f, indent=4, ensure_ascii=False)
 
