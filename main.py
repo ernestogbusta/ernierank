@@ -36,6 +36,7 @@ import random
 import gzip
 from requests.exceptions import HTTPError, RequestException
 import aiohttp
+import xml.etree.ElementTree as ET
 
 app = FastAPI(title="ErnieRank API")
 # 🧠 Memoria temporal para almacenar el progreso de batches
@@ -325,17 +326,31 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else 0
     }
 
+def is_valid_xml(content: bytes) -> bool:
+    """Verifica si el contenido es XML válido."""
+    try:
+        ET.fromstring(content)
+        return True
+    except ET.ParseError:
+        return False
+
 async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: str, headers: dict, retries: int = 3) -> list:
+    all_urls = set()
     for attempt in range(retries):
         try:
             response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
 
             if response.status_code == 200:
-                content_encoding = response.headers.get("Content-Encoding", "").lower()
+                content_length = int(response.headers.get("Content-Length", 0))
                 content_type = response.headers.get("Content-Type", "").lower()
                 content = response.content
 
-                if 'gzip' in content_encoding or sitemap_url.endswith('.gz'):
+                if content_length == 0:
+                    print(f"⚠️ Sitemap vacío: {sitemap_url} (Intento {attempt + 1}/{retries})")
+                    await asyncio.sleep(2 * (attempt + 1))
+                    continue
+
+                if 'gzip' in response.headers.get('Content-Encoding', '', '').lower() or sitemap_url.endswith('.gz'):
                     try:
                         content = gzip.decompress(content)
                         print(f"✅ Contenido GZIP descomprimido en {sitemap_url}")
@@ -344,30 +359,41 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
 
                 content_strip = content.lstrip()
 
-                # 🔥 Detectamos si realmente es XML o si es un HTML renderizado como XML
+                # Verificaciones de tipo de contenido
                 if content_strip.startswith(b"<?xml") or content_strip.startswith(b"<urlset") or content_strip.startswith(b"<sitemapindex"):
-                    print(f"✅ Sitemap XML detectado correctamente en {sitemap_url}")
-                    return await parse_sitemap_from_content(content, sitemap_url, client, headers)
-                
+                    if not is_valid_xml(content):
+                        print(f"❌ XML inválido recibido en: {sitemap_url}")
+                    else:
+                        print(f"✅ Sitemap XML detectado correctamente en {sitemap_url}")
+                        urls = await parse_sitemap_from_content(content, sitemap_url, client, headers)
+                        if urls:
+                            all_urls.update(urls)
                 elif b"<html" in content_strip[:500].lower():
-                    print(f"⚠️ Parece HTML en vez de XML en {sitemap_url}... intentando extraer sitemaps de HTML")
-                    return await find_sitemaps_in_html_from_content(content, sitemap_url, client, headers)
-                
+                    print(f"⚠️ HTML recibido pero no sitemap en: {sitemap_url}")
+                    urls = await find_sitemaps_in_html_from_content(content, sitemap_url, client, headers)
+                    if urls:
+                        all_urls.update(urls)
                 else:
-                    print(f"⚠️ Contenido no parece XML ni HTML reconocible en {sitemap_url}")
-                    return []
+                    print(f"⚠️ Contenido no reconocido en: {sitemap_url}")
+
+                break
 
             else:
                 print(f"⚠️ Código HTTP inesperado {response.status_code} en {sitemap_url}")
+                if response.status_code == 404 and sitemap_url.endswith('.xml.gz') and attempt < retries - 1:
+                    print(f"✅ Sitemap GZIP no encontrado, probando sin GZIP")
+                    sitemap_url = sitemap_url.replace('.xml.gz', '.xml')
+                    continue  # Volver a intentar sin .gz
+                await asyncio.sleep(2 * (attempt + 1))
 
         except (httpx.RequestError, httpx.RemoteProtocolError) as e:
-            print(f"⚠️ Error de conexión en {sitemap_url}: {e} (Intento {attempt+1}/{retries})")
+            print(f"⚠️ Error de conexión en {sitemap_url}: {e} (Intento {attempt + 1}/{retries})")
             await asyncio.sleep(2 * (attempt + 1))
         except Exception as e:
             print(f"❌ Error inesperado en {sitemap_url}: {e}")
             break
 
-    return []
+    return list(all_urls)
 
 async def parse_sitemap_from_content(content: bytes, sitemap_url: str, client: httpx.AsyncClient, headers: dict):
     try:
