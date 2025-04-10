@@ -5,13 +5,20 @@ from urllib.parse import urlparse
 from collections import Counter
 import httpx
 
-async def analyze_url(url: str, client: httpx.AsyncClient) -> dict:
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
-    }
+async def analyze_url(url: str, client: httpx.AsyncClient, headers: dict = None) -> dict:
     try:
-        response = await client.get(url, headers=headers)
+        # 🛠️ Usar headers personalizados si se proporcionan
+        if headers:
+            response = await client.get(url, headers=headers)
+        else:
+            # Fallback: header de navegador clásico si no se pasa uno
+            default_headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
+            }
+            response = await client.get(url, headers=default_headers)
+
         print(f"Attempting to process URL: {url} with status: {response.status_code}")
+
         if response.status_code == 200 and 'text/html' in response.headers.get('Content-Type', ''):
             soup = BeautifulSoup(response.content, 'html.parser')
             slug = extract_slug(url)
@@ -35,6 +42,7 @@ async def analyze_url(url: str, client: httpx.AsyncClient) -> dict:
             }
         else:
             return None
+
     except Exception as e:
         print(f"Error processing URL {url}: {e}")
         return None

@@ -38,6 +38,8 @@ from requests.exceptions import HTTPError, RequestException
 import aiohttp
 
 app = FastAPI(title="ErnieRank API")
+# 🧠 Memoria temporal para almacenar el progreso de batches
+batch_results = {}
 
 @app.on_event("startup")
 async def startup_event():
@@ -98,6 +100,26 @@ crawler_mode = {
     "current_domain": None
 }
 
+def get_dynamic_headers():
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.128 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36",
+        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Mozilla/5.0 (compatible; Screaming Frog SEO Spider/20.0; +http://www.screamingfrog.co.uk/seo-spider/)"
+    ]
+
+    headers = {
+        "User-Agent": random.choice(user_agents),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Connection": "keep-alive",
+        "Referer": "https://www.google.com/",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    return headers
+
 async def safe_analyze(url, client, semaphore):
     domain = urlparse(url).netloc
 
@@ -114,7 +136,8 @@ async def safe_analyze(url, client, semaphore):
 
     async with semaphore:
         try:
-            result, error_type = await retry_analyze_url(url, client, max_retries=max_retries)
+            dynamic_headers = get_dynamic_headers()  # 🎯 ¡Nuevo! Headers dinámicos por URL
+            result, error_type = await retry_analyze_url(url, client, max_retries=max_retries, custom_headers=dynamic_headers)
 
             if not result:
                 crawler_mode["error_counter"] += 1
@@ -122,13 +145,11 @@ async def safe_analyze(url, client, semaphore):
             else:
                 crawler_mode["error_counter"] = 0
 
-            # ⬇️ Mejor detección de "fragilidad" del servidor
             if error_type in ["429", "503", "network_or_http"]:
                 crawler_mode["safe_mode"] = True
                 crawler_mode["concurrency"] = 1
                 print(f"🚨 Server unstable detected. Switching to SAFE MODE para {domain} (por {error_type}).")
 
-            # Nuevo: Si 3 errores acumulados, forzar SAFE MODE
             if crawler_mode["error_counter"] >= 3:
                 crawler_mode["safe_mode"] = True
                 crawler_mode["concurrency"] = 1
@@ -144,6 +165,101 @@ async def safe_analyze(url, client, semaphore):
                 crawler_mode["concurrency"] = 1
             await asyncio.sleep(sleep_between_requests)
             return None
+
+@app.post("/start_batch")
+async def start_batch(request: BatchRequest, background_tasks: BackgroundTasks):
+    batch_id = f"batch_{int(time.time())}"  # 🔥 batch ID único basado en timestamp
+    batch_results[batch_id] = {
+        "status": "processing",
+        "processed_urls": [],
+        "start_index": request.start
+    }
+    background_tasks.add_task(process_batch_background, batch_id, request)
+    return {"message": "Batch started", "batch_id": batch_id}
+
+async def process_batch_background(batch_id: str, request: BatchRequest):
+    domain = request.domain.rstrip('/')
+    print(f"🔎 (Background) Fetching URLs from domain: {domain}")
+
+    urls = await fetch_sitemap(app.state.client, domain) or []
+
+    if not urls:
+        batch_results[batch_id]["status"] = "failed"
+        return
+
+    urls_to_process = urls[request.start:request.start + request.batch_size]
+
+    if not urls_to_process:
+        batch_results[batch_id]["status"] = "done"
+        return
+
+    concurrency = crawler_mode.get("concurrency", 10)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    tasks = [safe_analyze(url, app.state.client, semaphore) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
+
+    valid_results = [
+        {
+            "url": result['url'],
+            "title": result.get('title', "No title provided"),
+            "meta_description": result.get('meta_description', "No description provided"),
+            "slug": urlparse(result['url']).path,
+            "h1_tags": result.get('h1_tags', []),
+            "h2_tags": result.get('h2_tags', []),
+            "main_keyword": result.get('main_keyword', "Not specified"),
+            "secondary_keywords": result.get('secondary_keywords', []),
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+        }
+        for result in results if result
+    ]
+
+    batch_results[batch_id]["processed_urls"] = valid_results
+    batch_results[batch_id]["status"] = "done"
+
+@app.get("/get_batch_result/{batch_id}")
+async def get_batch_result(batch_id: str):
+    if batch_id not in batch_results:
+        raise HTTPException(status_code=404, detail="Batch ID not found")
+
+    return batch_results[batch_id]
+
+@app.post("/full_process_domain")
+async def full_process_domain(request: BatchRequest):
+    domain = request.domain.rstrip('/')
+    batch_size = request.batch_size
+    start = request.start
+
+    print(f"🚀 Iniciando procesamiento completo de {domain}")
+
+    all_processed_urls = []
+
+    while True:
+        print(f"🔎 Procesando batch desde índice {start}")
+
+        batch_request = BatchRequest(
+            domain=domain,
+            batch_size=batch_size,
+            start=start
+        )
+        response = await process_urls_in_batches(batch_request)
+
+        batch_processed = response.get("processed_urls", [])
+        more_batches = response.get("more_batches", False)
+        next_start = response.get("next_batch_start", 0)
+
+        all_processed_urls.extend(batch_processed)
+
+        if not more_batches:
+            print("✅ Todos los batches procesados.")
+            break
+
+        start = next_start  # Preparar el siguiente batch
+
+    return {
+        "total_urls_processed": len(all_processed_urls),
+        "processed_urls": all_processed_urls
+    }
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
@@ -378,14 +494,14 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
 
     return discovered
 
-async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 12, initial_delay: float = 1.0):
+async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 12, initial_delay: float = 1.0, custom_headers: dict = None):
     delay = initial_delay
     last_error_type = None
 
     for attempt in range(1, max_retries + 1):
         try:
             print(f"🔄 Attempt {attempt} fetching: {url}")
-            result = await analyze_url(url, client)
+            result = await analyze_url(url, client, headers=custom_headers)  # 🎯 ¡Nuevo! Pasar headers dinámicos
             if result:
                 return result, None
             else:
@@ -398,16 +514,18 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
             else:
                 last_error_type = "http_error"
             print(f"⚠️ HTTPStatusError en {url}: {e}")
+
         except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
             last_error_type = "network_or_http"
             print(f"⚠️ Error de red en {url}: {e}")
+
         except Exception as e:
             last_error_type = "unknown"
             print(f"❌ Unexpected error en {url}: {e}")
             return None, last_error_type
 
         await asyncio.sleep(delay)
-        delay *= random.uniform(1.4, 2.0)  # 💤 backoff controlado para no saturar
+        delay *= random.uniform(1.4, 2.0)  # ⏳ Exponential backoff suave
 
     print(f"🛑 Failed fetching {url} after {max_retries} retries.")
     return None, last_error_type
