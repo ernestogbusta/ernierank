@@ -331,19 +331,15 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
             response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
 
             if response.status_code == 200:
-                # 🔥 NUEVO: Validar Content-Type
-                content_type = response.headers.get("Content-Type", "").lower()
-                if "xml" not in content_type and "text/xml" not in content_type:
-                    print(f"⚠️ Content-Type no es XML en {sitemap_url}: {content_type}")
-                    return []
-
-                # 🔥 NUEVO: Validar si empieza por '<'
                 content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
-                if not content.lstrip().startswith(b"<"):
-                    print(f"⚠️ Contenido no parece XML válido en {sitemap_url}")
-                    return []
 
-                return await parse_sitemap(response, sitemap_url, client, headers)
+                # ⚡️ Nueva validación: no depender solo del Content-Type
+                # Verificamos directamente si empieza por < (XML) y parseamos
+                if content.lstrip().startswith(b"<"):
+                    return await parse_sitemap_from_content(content, sitemap_url, client, headers)
+                else:
+                    print(f"⚠️ Contenido no parece XML en {sitemap_url}")
+                    return []
 
             else:
                 print(f"⚠️ Código HTTP inesperado {response.status_code} en {sitemap_url}")
@@ -356,6 +352,37 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
             break
 
     return []
+
+async def parse_sitemap_from_content(content: bytes, sitemap_url: str, client: httpx.AsyncClient, headers: dict) -> list:
+    try:
+        data = xmltodict.parse(content)
+
+        if 'urlset' in data:
+            urls = data['urlset'].get('url', [])
+            if isinstance(urls, dict):
+                urls = [urls]
+            return [entry['loc'] for entry in urls if 'loc' in entry]
+
+        elif 'sitemapindex' in data:
+            nested = data['sitemapindex'].get('sitemap', [])
+            if isinstance(nested, dict):
+                nested = [nested]
+            all_nested_urls = []
+            for sitemap in nested:
+                loc = sitemap.get('loc')
+                if loc:
+                    nested_urls = await fetch_individual_sitemap(client, loc, headers)
+                    if nested_urls:
+                        all_nested_urls.extend(nested_urls)
+            return all_nested_urls
+
+        else:
+            print(f"⚠️ No se encontró urlset ni sitemapindex en {sitemap_url}")
+            return []
+
+    except Exception as e:
+        print(f"⚠️ Error parseando sitemap {sitemap_url}: {e}")
+        return []
 
 async def find_sitemaps_in_html(client: httpx.AsyncClient, base_domain: str, headers: dict):
     try:
