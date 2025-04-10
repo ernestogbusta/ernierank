@@ -329,14 +329,32 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
     for attempt in range(retries):
         try:
             response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
+
             if response.status_code == 200:
+                # 🔥 NUEVO: Validar Content-Type
+                content_type = response.headers.get("Content-Type", "").lower()
+                if "xml" not in content_type and "text/xml" not in content_type:
+                    print(f"⚠️ Content-Type no es XML en {sitemap_url}: {content_type}")
+                    return []
+
+                # 🔥 NUEVO: Validar si empieza por '<'
+                content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
+                if not content.lstrip().startswith(b"<"):
+                    print(f"⚠️ Contenido no parece XML válido en {sitemap_url}")
+                    return []
+
                 return await parse_sitemap(response, sitemap_url, client, headers)
+
+            else:
+                print(f"⚠️ Código HTTP inesperado {response.status_code} en {sitemap_url}")
+
         except (httpx.RequestError, httpx.RemoteProtocolError) as e:
             print(f"⚠️ Error de conexión en {sitemap_url}: {e} (Intento {attempt+1}/{retries})")
             await asyncio.sleep(2 * (attempt + 1))
         except Exception as e:
             print(f"❌ Error inesperado en {sitemap_url}: {e}")
             break
+
     return []
 
 async def find_sitemaps_in_html(client: httpx.AsyncClient, base_domain: str, headers: dict):
