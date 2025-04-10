@@ -6,7 +6,7 @@ import time
 api_url = "https://ernierank-vd20.onrender.com/process_urls_in_batches"
 
 # Configura el dominio que quieres analizar
-domain = "https://ernestogbustamante.com/"
+domain = "https://aulacm.com/"
 
 # Cabeceras HTTP necesarias
 headers = {
