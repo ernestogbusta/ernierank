@@ -36,7 +36,6 @@ import random
 import gzip
 from requests.exceptions import HTTPError, RequestException
 import aiohttp
-import xml.etree.ElementTree as ET
 
 app = FastAPI(title="ErnieRank API")
 # 🧠 Memoria temporal para almacenar el progreso de batches
@@ -326,31 +325,17 @@ async def process_urls_in_batches(request: BatchRequest):
         "next_batch_start": next_start if more_batches else 0
     }
 
-def is_valid_xml(content: bytes) -> bool:
-    """Verifica si el contenido es XML válido."""
-    try:
-        ET.fromstring(content)
-        return True
-    except ET.ParseError:
-        return False
-
 async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: str, headers: dict, retries: int = 3) -> list:
-    all_urls = set()
     for attempt in range(retries):
         try:
             response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
 
             if response.status_code == 200:
-                content_length = int(response.headers.get("Content-Length", 0))
+                content_encoding = response.headers.get("Content-Encoding", "").lower()
                 content_type = response.headers.get("Content-Type", "").lower()
                 content = response.content
 
-                if content_length == 0:
-                    print(f"⚠️ Sitemap vacío: {sitemap_url} (Intento {attempt + 1}/{retries})")
-                    await asyncio.sleep(2 * (attempt + 1))
-                    continue
-
-                if 'gzip' in response.headers.get('Content-Encoding', '', '').lower() or sitemap_url.endswith('.gz'):
+                if 'gzip' in content_encoding or sitemap_url.endswith('.gz'):
                     try:
                         content = gzip.decompress(content)
                         print(f"✅ Contenido GZIP descomprimido en {sitemap_url}")
@@ -359,41 +344,30 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
 
                 content_strip = content.lstrip()
 
-                # Verificaciones de tipo de contenido
+                # 🔥 Detectamos si realmente es XML o si es un HTML renderizado como XML
                 if content_strip.startswith(b"<?xml") or content_strip.startswith(b"<urlset") or content_strip.startswith(b"<sitemapindex"):
-                    if not is_valid_xml(content):
-                        print(f"❌ XML inválido recibido en: {sitemap_url}")
-                    else:
-                        print(f"✅ Sitemap XML detectado correctamente en {sitemap_url}")
-                        urls = await parse_sitemap_from_content(content, sitemap_url, client, headers)
-                        if urls:
-                            all_urls.update(urls)
+                    print(f"✅ Sitemap XML detectado correctamente en {sitemap_url}")
+                    return await parse_sitemap_from_content(content, sitemap_url, client, headers)
+                
                 elif b"<html" in content_strip[:500].lower():
-                    print(f"⚠️ HTML recibido pero no sitemap en: {sitemap_url}")
-                    urls = await find_sitemaps_in_html_from_content(content, sitemap_url, client, headers)
-                    if urls:
-                        all_urls.update(urls)
+                    print(f"⚠️ Parece HTML en vez de XML en {sitemap_url}... intentando extraer sitemaps de HTML")
+                    return await find_sitemaps_in_html_from_content(content, sitemap_url, client, headers)
+                
                 else:
-                    print(f"⚠️ Contenido no reconocido en: {sitemap_url}")
-
-                break
+                    print(f"⚠️ Contenido no parece XML ni HTML reconocible en {sitemap_url}")
+                    return []
 
             else:
                 print(f"⚠️ Código HTTP inesperado {response.status_code} en {sitemap_url}")
-                if response.status_code == 404 and sitemap_url.endswith('.xml.gz') and attempt < retries - 1:
-                    print(f"✅ Sitemap GZIP no encontrado, probando sin GZIP")
-                    sitemap_url = sitemap_url.replace('.xml.gz', '.xml')
-                    continue  # Volver a intentar sin .gz
-                await asyncio.sleep(2 * (attempt + 1))
 
         except (httpx.RequestError, httpx.RemoteProtocolError) as e:
-            print(f"⚠️ Error de conexión en {sitemap_url}: {e} (Intento {attempt + 1}/{retries})")
+            print(f"⚠️ Error de conexión en {sitemap_url}: {e} (Intento {attempt+1}/{retries})")
             await asyncio.sleep(2 * (attempt + 1))
         except Exception as e:
             print(f"❌ Error inesperado en {sitemap_url}: {e}")
             break
 
-    return list(all_urls)
+    return []
 
 async def parse_sitemap_from_content(content: bytes, sitemap_url: str, client: httpx.AsyncClient, headers: dict):
     try:
@@ -460,6 +434,7 @@ async def find_sitemaps_in_html_from_content(content: bytes, base_url: str, clie
         print(f"⚠️ Error buscando sitemaps dentro del contenido HTML en {base_url}: {e}")
     return set()
 
+
 async def fetch_with_retry(client, url, headers, retries=3, delay=5):
     for attempt in range(1, retries + 1):
         try:
@@ -477,66 +452,75 @@ async def fetch_with_retry(client, url, headers, retries=3, delay=5):
     print(f"🛑 Failed after {retries} attempts: {url}")
     return None
 
-async def fetch_sitemap(url: str, client: AsyncClient = None, max_retries: int = 3) -> Optional[str]:
-    """
-    Obtiene el contenido de un sitemap, manejando varios tipos de contenido
-    y errores comunes.
-    """
-    close_client = False
-    if client is None:
-        client = AsyncClient(timeout=Timeout(30.0))
-        close_client = True
+async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.184 Mobile Safari/537.36 "
+                      "(compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+        "Connection": "keep-alive",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    }
 
-    for attempt in range(max_retries):
-        try:
-            response = await client.get(url, follow_redirects=True)
-            response.raise_for_status()
+    base_domain = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
+    sitemap_candidates = [
+        f"{base_domain}/sitemap_index.xml",
+        f"{base_domain}/sitemap.xml",
+        f"{base_domain}/sitemap1.xml",
+        f"{base_domain}/sitemap.xml.gz"
+    ]
 
-            content_type = response.headers.get('Content-Type', '').lower()
+    collected_urls = set()
 
-            if 'xml' in content_type or url.endswith('.xml') or url.endswith('.xml.gz'):
-                if 'gzip' in content_type or url.endswith('.gz'):
-                    try:
-                        content = gzip.decompress(response.content).decode('utf-8')
-                        return content
-                    except Exception as e:
-                        print(f"Error al descomprimir gzip: {e}")
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(2 ** attempt)  # Exponential backoff
-                        continue
-                else:
-                    return response.text
+    # 1. Probar los candidatos conocidos
+    for sitemap_url in sitemap_candidates:
+        response = await fetch_with_retry(client, sitemap_url, headers)
+        if response:
+            content_type = response.headers.get("Content-Type", "").lower()
+            content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
 
-            elif 'text/plain' in content_type or 'text/html' in content_type:
-                return response.text
-
+            # Verificar si es XML
+            if content.lstrip().startswith(b"<"):
+                urls = await parse_sitemap(response, sitemap_url, client, headers)
+                if urls:
+                    collected_urls.update(urls)
+                    break  # ✅ Si encontramos uno válido, paramos
             else:
-                print(f"Tipo de contenido no soportado: {content_type} en {url}")
-                return None
+                # Si parece HTML, probar a buscar sitemaps dentro del contenido
+                if b"<html" in content.lower():
+                    print(f"⚡ Detectado HTML en {sitemap_url}. Buscando posibles links de sitemaps dentro del contenido...")
+                    urls_in_html = await find_sitemaps_in_html_from_content(content, sitemap_url, client, headers)
+                    if urls_in_html:
+                        collected_urls.update(urls_in_html)
+                        break
 
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                print(f"Error 404 al obtener el sitemap: {url}")
-                break  # No reintentar si es 404
-            else:
-                print(f"Error HTTP {e.response.status_code} al obtener el sitemap: {url}")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2 ** attempt)  # Exponential backoff
-                continue
-        except httpx.RequestError as e:
-            print(f"Error de conexión al obtener el sitemap: {url} - {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
-            continue
-        except Exception as e:
-            print(f"Error inesperado al obtener el sitemap: {url} - {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)  # Exponential backoff
-            continue
+        else:
+            print(f"⚠️ No se pudo obtener {sitemap_url}")
 
-    if close_client:
-        await client.aclose()
-    return None
+    # 2. Buscar en robots.txt si no encontró antes
+    if not collected_urls:
+        robots_sitemaps = await discover_sitemaps_from_robots_txt(client, base_domain, headers)
+        for sitemap_url in robots_sitemaps:
+            urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)
+            if urls:
+                collected_urls.update(urls)
+
+    # 3. Buscar en la home HTML si no encontró nada
+    if not collected_urls:
+        print(f"🔎 Buscando sitemaps en la home {base_domain}")
+        urls = await find_sitemaps_in_html(client, base_domain, headers)
+        if urls:
+            collected_urls.update(urls)
+
+    if not collected_urls:
+        print(f"🚫 No se encontraron URLs en {base_domain}")
+        return None
+
+    print(f"✅ Total URLs encontradas: {len(collected_urls)}")
+    return list(collected_urls)
 
 async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient, headers: dict):
     try:
