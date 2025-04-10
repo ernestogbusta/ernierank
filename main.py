@@ -331,10 +331,17 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
             response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
 
             if response.status_code == 200:
-                content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
+                content_encoding = response.headers.get("Content-Encoding", "").lower()
+                content = response.content
 
-                # ⚡️ Nueva validación: no depender solo del Content-Type
-                # Verificamos directamente si empieza por < (XML) y parseamos
+                if 'gzip' in content_encoding or sitemap_url.endswith('.gz'):
+                    try:
+                        content = gzip.decompress(content)
+                        print(f"✅ Contenido GZIP descomprimido en {sitemap_url}")
+                    except Exception as e:
+                        print(f"⚠️ Error descomprimiendo GZIP en {sitemap_url}: {e}")
+
+                # ⚡️ Ahora SÍ: contenido ya descomprimido
                 if content.lstrip().startswith(b"<"):
                     return await parse_sitemap_from_content(content, sitemap_url, client, headers)
                 else:
