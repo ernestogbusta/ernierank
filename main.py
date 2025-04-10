@@ -140,13 +140,13 @@ async def safe_analyze(url, client, semaphore):
             result, error_type = await retry_analyze_url(url, client, max_retries=max_retries, custom_headers=dynamic_headers)
 
             if not result:
-                if error_type != "502":  # 🔥 IGNORAMOS 502 PARA EL CONTADOR
+                if error_type != "502":
                     crawler_mode["error_counter"] += 1
                     print(f"⚠️ Error acumulado ({crawler_mode['error_counter']}) en {domain}. Error detectado: {error_type}")
             else:
                 crawler_mode["error_counter"] = 0
 
-            if error_type in ["429", "503", "network_or_http"]:
+            if error_type in ["429", "503", "network_or_http", "unknown"]:
                 crawler_mode["safe_mode"] = True
                 crawler_mode["concurrency"] = 1
                 print(f"🚨 Server unstable detected. Switching to SAFE MODE para {domain} (por {error_type}).")
@@ -160,7 +160,7 @@ async def safe_analyze(url, client, semaphore):
 
         except Exception as e:
             crawler_mode["error_counter"] += 1
-            print(f"❌ Excepción analizando {url}: {e} | Error count: {crawler_mode['error_counter']}")
+            print(f"❌ Excepción grave analizando {url}: {e} | Error count: {crawler_mode['error_counter']}")
             if crawler_mode["error_counter"] >= 3:
                 crawler_mode["safe_mode"] = True
                 crawler_mode["concurrency"] = 1
@@ -502,7 +502,7 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
     for attempt in range(1, max_retries + 1):
         try:
             print(f"🔄 Attempt {attempt} fetching: {url}")
-            result = await analyze_url(url, client, headers=custom_headers)  # 🎯 ¡Nuevo! Pasar headers dinámicos
+            result = await analyze_url(url, client, headers=custom_headers)
             if result:
                 return result, None
             else:
@@ -510,14 +510,13 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
 
         except httpx.HTTPStatusError as e:
             status_code = e.response.status_code
+            print(f"⚠️ HTTPStatusError ({status_code}) en {url}: {e}")
             if status_code == 502:
-                print(f"⚠️ Error 502 en {url}, ignorándolo como URL fallida.")
-                return None, "502"
-            if status_code in [429, 503]:
+                return None, "502"  # 🔥 Si es 502, salir como error no fatal
+            elif status_code in [429, 503]:
                 last_error_type = str(status_code)
             else:
                 last_error_type = "http_error"
-            print(f"⚠️ HTTPStatusError en {url}: {e}")
 
         except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
             last_error_type = "network_or_http"
@@ -526,10 +525,9 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
         except Exception as e:
             last_error_type = "unknown"
             print(f"❌ Unexpected error en {url}: {e}")
-            return None, last_error_type
 
         await asyncio.sleep(delay)
-        delay *= random.uniform(1.4, 2.0)  # ⏳ Exponential backoff suave
+        delay *= random.uniform(1.4, 2.0)
 
     print(f"🛑 Failed fetching {url} after {max_retries} retries.")
     return None, last_error_type
