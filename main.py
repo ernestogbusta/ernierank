@@ -85,70 +85,82 @@ class BatchRequest(BaseModel):
     batch_size: int = 10  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
+# Definición del modo de rastreo global
+crawler_mode = {
+    "safe_mode": False,
+    "error_counter": 0,
+    "current_domain": None
+}
+
+async def safe_analyze(url, client, semaphore):
+    domain = urlparse(url).netloc
+
+    if crawler_mode["current_domain"] != domain:
+        crawler_mode["current_domain"] = domain
+        crawler_mode["error_counter"] = 0
+        crawler_mode["safe_mode"] = False
+        crawler_mode["concurrency"] = 5
+        print(f"🌐 Nuevo dominio detectado: {domain}. Reiniciando contadores.")
+
+    concurrency = crawler_mode.get("concurrency", 5)
+    sleep_between_requests = random.uniform(1, 3) if not crawler_mode["safe_mode"] else random.uniform(6, 9)
+    max_retries = 5 if not crawler_mode["safe_mode"] else 10
+
+    async with semaphore:
+        try:
+            result, error_type = await retry_analyze_url(url, client, max_retries=max_retries)
+
+            if not result:
+                crawler_mode["error_counter"] += 1
+                print(f"⚠️ Error acumulado ({crawler_mode['error_counter']}) en {domain}. Error detectado: {error_type}")
+            else:
+                crawler_mode["error_counter"] = 0
+
+            if error_type in ["429", "503"]:
+                if crawler_mode["concurrency"] > 1:
+                    crawler_mode["concurrency"] = max(1, crawler_mode["concurrency"] - 1)
+                    print(f"⚠️ Server fragile: reduciendo concurrency a {crawler_mode['concurrency']}")
+                crawler_mode["safe_mode"] = True
+
+            if crawler_mode["error_counter"] >= 3 and not crawler_mode["safe_mode"]:
+                crawler_mode["safe_mode"] = True
+                crawler_mode["concurrency"] = 1
+                print(f"🚨 Server unstable detected. Switching to SAFE MODE para {domain}.")
+
+            await asyncio.sleep(sleep_between_requests)
+            return result
+
+        except Exception as e:
+            crawler_mode["error_counter"] += 1
+            print(f"❌ Excepción analizando {url}: {e} | Error count: {crawler_mode['error_counter']}")
+            if crawler_mode["error_counter"] >= 3:
+                crawler_mode["safe_mode"] = True
+                crawler_mode["concurrency"] = 1
+            await asyncio.sleep(sleep_between_requests)
+            return None
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     domain = request.domain.rstrip('/')
-    print(f"Fetching URLs from domain: {domain}")
+    print(f"🔎 Fetching URLs from domain: {domain}")
     
-    urls = await fetch_sitemap(app.state.client, domain)
+    urls = await fetch_sitemap(app.state.client, domain) or []
+
     if not urls:
         print("🚫 No URLs found in sitemap.")
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
-    
-    print(f"✅ Total URLs fetched: {len(urls)}")
+
     urls_to_process = urls[request.start:request.start + request.batch_size]
+
     if not urls_to_process:
         print("🚫 No URLs to process in this batch.")
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
-    semaphore = asyncio.Semaphore(5)
+    concurrency = 5 if not crawler_mode["safe_mode"] else 1
+    semaphore = asyncio.Semaphore(concurrency)
 
-    async def safe_analyze(url):
-        async with semaphore:
-            return await retry_analyze_url(url, app.state.client)
-
-    tasks = [safe_analyze(url) for url in urls_to_process]
+    tasks = [safe_analyze(url, app.state.client, semaphore) for url in urls_to_process]
     results = await asyncio.gather(*tasks)
-    
-    valid_results = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "meta_description": result.get('meta_description', "No description provided"),
-            "slug": urlparse(result['url']).path,
-            "h1_tags": result.get('h1_tags', []),
-            "h2_tags": result.get('h2_tags', []),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        }
-        for result in results if result
-    ]
-
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
-
-    return {
-        "processed_urls": valid_results,
-        "more_batches": more_batches,
-        "next_batch_start": next_start if more_batches else 0
-    }
-
-    async def sem_analyze_url(url):
-        async with semaphore:
-            try:
-                result = await retry_analyze_url(url, app.state.client)
-                await asyncio.sleep(2)  # 💤 Espera de 2 segundos entre peticiones para evitar baneos
-                return result
-            except Exception as e:
-                print(f"❌ Error procesando {url}: {e}")
-                return None
-
-    tasks = [sem_analyze_url(url) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-
-    print(f"✅ Results received for batch: {len([r for r in results if r])} successful, {len(results) - len([r for r in results if r])} failed.")
 
     valid_results = [
         {
@@ -174,118 +186,6 @@ async def process_urls_in_batches(request: BatchRequest):
         "processed_urls": valid_results,
         "more_batches": more_batches,
         "next_batch_start": next_start if more_batches else 0
-    }
-
-
-    async def sem_analyze_url(url):
-        async with semaphore:
-            try:
-                result = await retry_analyze_url(url, app.state.client)
-                await asyncio.sleep(2)  # 💤 Añadir espera para evitar bloqueos
-                return result
-            except Exception as e:
-                print(f"❌ Error procesando {url}: {e}")
-                return None
-
-    tasks = [sem_analyze_url(url) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-
-    print(f"✅ Results received for batch: {len([r for r in results if r])} successful, {len(results) - len([r for r in results if r])} failed.")
-
-    valid_results = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "meta_description": result.get('meta_description', "No description provided"),
-            "slug": urlparse(result['url']).path,
-            "h1_tags": result.get('h1_tags', []),
-            "h2_tags": result.get('h2_tags', []),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        }
-        for result in results if result
-    ]
-
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
-
-    print(f"🔄 More batches pending: {more_batches} | Next batch start index: {next_start}")
-
-    return {
-        "processed_urls": valid_results,
-        "more_batches": more_batches,
-        "next_batch_start": next_start if more_batches else 0
-    }
-
-
-
-async def sem_analyze_url(url):
-    async with semaphore:
-        try:
-            result = await retry_analyze_url(url, app.state.client)
-            await asyncio.sleep(2)  # 💤 Añadimos 2 segundos de espera entre peticiones
-            return result
-        except Exception as e:
-            print(f"❌ Error procesando {url}: {e}")
-            return None
-
-    print(f"✅ Results received for batch: {len([r for r in results if r])} successful, {len(results) - len([r for r in results if r])} failed.")
-
-    valid_results = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "meta_description": result.get('meta_description', "No description provided"),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified"),
-            "content": result.get('content', "")
-        }
-        for result in results if result
-    ]
-    print(f"✅ Filtered valid results: {len(valid_results)}")
-
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
-    print(f"🔄 More batches pending: {more_batches} | Next batch start index: {next_start}")
-
-    return {
-        "processed_urls": valid_results,
-        "more_batches": more_batches,
-        "next_batch_start": next_start if more_batches else None
-    }
-
-async def sem_analyze_url(url):
-    async with semaphore:
-        return await retry_analyze_url(url, app.state.client)
-
-    tasks = [sem_analyze_url(url) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-    print(f"Results received: {results}")
-
-    valid_results = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "meta_description": result.get('meta_description', "No description provided"),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified"),
-            "content": result.get('content', "")
-        }
-        for result in results if result
-    ]
-    print(f"Filtered results: {valid_results}")
-
-    next_start = request.start + len(urls_to_process)
-    more_batches = next_start < len(urls)
-    print(f"More batches: {more_batches}, Next batch start index: {next_start}")
-
-    return {
-        "processed_urls": valid_results,
-        "more_batches": more_batches,
-        "next_batch_start": next_start if more_batches else None
     }
 
 async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: str, headers: dict, retries: int = 3) -> list:
@@ -467,29 +367,37 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
     return discovered
 
 async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 1.5):
-    """
-    Reintenta analizar una URL varias veces con backoff exponencial si falla, usando headers de navegador.
-    """
     delay = initial_delay
+    last_error_type = None
+
     for attempt in range(1, max_retries + 1):
         try:
             print(f"🔄 Attempt {attempt} fetching: {url}")
             result = await analyze_url(url, client)
             if result:
-                return result
+                return result, None
             else:
-                print(f"⚠️ Empty result for {url} attempt {attempt}")
-        except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            print(f"⚠️ Connection error on {url} at attempt {attempt}: {e}")
+                print(f"⚠️ Empty result en {url} attempt {attempt}")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in [429, 503]:
+                last_error_type = str(exc.response.status_code)
+                print(f"⏳ {exc.response.status_code} detected en {url}. Backing off...")
+            else:
+                last_error_type = "other_http_error"
+                print(f"❌ HTTP error {exc.response.status_code} en {url}")
+        except (httpx.RequestError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            last_error_type = "timeout_or_network"
+            print(f"⚠️ Network/timeout error en {url}: {e}")
         except Exception as e:
-            print(f"❌ Unexpected error on {url}: {e}")
-            return None
-        
+            last_error_type = "unknown"
+            print(f"❌ Unexpected error en {url}: {e}")
+            return None, last_error_type
+
         await asyncio.sleep(delay)
-        delay *= 2  # Exponential backoff
+        delay *= random.uniform(1.5, 2.2)  # ⏳ Exponential backoff, realista
 
     print(f"🛑 Failed fetching {url} after {max_retries} retries.")
-    return None
+    return None, last_error_type
 
 
 ############################################
