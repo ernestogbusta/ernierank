@@ -13,7 +13,14 @@ domain = "https://aulacm.com/"
 headers = {
     "accept": "application/json",
     "Content-Type": "application/json",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.184 Mobile Safari/537.36 "
+                  "(compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+    "Accept-Encoding": "gzip",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+    "Connection": "keep-alive"
 }
 
 # Configuración inicial
