@@ -136,12 +136,13 @@ async def safe_analyze(url, client, semaphore):
 
     async with semaphore:
         try:
-            dynamic_headers = get_dynamic_headers()  # 🎯 ¡Nuevo! Headers dinámicos por URL
+            dynamic_headers = get_dynamic_headers()
             result, error_type = await retry_analyze_url(url, client, max_retries=max_retries, custom_headers=dynamic_headers)
 
             if not result:
-                crawler_mode["error_counter"] += 1
-                print(f"⚠️ Error acumulado ({crawler_mode['error_counter']}) en {domain}. Error detectado: {error_type}")
+                if error_type != "502":  # 🔥 IGNORAMOS 502 PARA EL CONTADOR
+                    crawler_mode["error_counter"] += 1
+                    print(f"⚠️ Error acumulado ({crawler_mode['error_counter']}) en {domain}. Error detectado: {error_type}")
             else:
                 crawler_mode["error_counter"] = 0
 
@@ -509,6 +510,9 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
 
         except httpx.HTTPStatusError as e:
             status_code = e.response.status_code
+            if status_code == 502:
+                print(f"⚠️ Error 502 en {url}, ignorándolo como URL fallida.")
+                return None, "502"
             if status_code in [429, 503]:
                 last_error_type = str(status_code)
             else:
