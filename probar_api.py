@@ -1,3 +1,5 @@
+# Este es el archivo probar_api.py con el que estamos haciendo pruebas desde terminal llamando a la aplicación directamente desplegada en el servidor
+
 import requests
 import json
 import time

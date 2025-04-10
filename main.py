@@ -105,12 +105,12 @@ async def safe_analyze(url, client, semaphore):
         crawler_mode["current_domain"] = domain
         crawler_mode["error_counter"] = 0
         crawler_mode["safe_mode"] = False
-        crawler_mode["concurrency"] = 10  # 🆙 Screaming Frog usa 10 conexiones por defecto
+        crawler_mode["concurrency"] = 10
         print(f"🌐 Nuevo dominio detectado: {domain}. Reiniciando contadores.")
 
     concurrency = crawler_mode.get("concurrency", 10)
-    sleep_between_requests = random.uniform(0.8, 1.2) if not crawler_mode["safe_mode"] else random.uniform(3.0, 5.0)
-    max_retries = 10  # 🆙 Igual que configuraste tú y Screaming Frog recomienda
+    sleep_between_requests = random.uniform(0.6, 0.9) if not crawler_mode["safe_mode"] else random.uniform(3.5, 6.0)
+    max_retries = 12
 
     async with semaphore:
         try:
@@ -122,16 +122,16 @@ async def safe_analyze(url, client, semaphore):
             else:
                 crawler_mode["error_counter"] = 0
 
-            if error_type in ["429", "503"]:
-                if crawler_mode["concurrency"] > 1:
-                    crawler_mode["concurrency"] = max(1, crawler_mode["concurrency"] - 1)
-                    print(f"⚠️ Server fragile: reduciendo concurrency a {crawler_mode['concurrency']}")
-                crawler_mode["safe_mode"] = True
-
-            if crawler_mode["error_counter"] >= 3 and not crawler_mode["safe_mode"]:
+            # ⬇️ Mejor detección de "fragilidad" del servidor
+            if error_type in ["429", "503", "network_or_http"]:
                 crawler_mode["safe_mode"] = True
                 crawler_mode["concurrency"] = 1
-                print(f"🚨 Server unstable detected. Switching to SAFE MODE para {domain}.")
+                print(f"🚨 Server unstable detected. Switching to SAFE MODE para {domain} (por {error_type}).")
+
+            # Nuevo: Si 3 errores acumulados, forzar SAFE MODE
+            if crawler_mode["error_counter"] >= 3:
+                crawler_mode["safe_mode"] = True
+                crawler_mode["concurrency"] = 1
 
             await asyncio.sleep(sleep_between_requests)
             return result
@@ -162,7 +162,8 @@ async def process_urls_in_batches(request: BatchRequest):
         print("🚫 No URLs to process in this batch.")
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
-    concurrency = 5 if not crawler_mode["safe_mode"] else 1
+    # ⚡ Aquí el ajuste importante
+    concurrency = crawler_mode.get("concurrency", 10)
     semaphore = asyncio.Semaphore(concurrency)
 
     tasks = [safe_analyze(url, app.state.client, semaphore) for url in urls_to_process]
@@ -377,7 +378,7 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
 
     return discovered
 
-async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 10, initial_delay: float = 1.0):
+async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 12, initial_delay: float = 1.0):
     delay = initial_delay
     last_error_type = None
 
@@ -389,16 +390,24 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
                 return result, None
             else:
                 print(f"⚠️ Empty result en {url} attempt {attempt}")
-        except (httpx.HTTPStatusError, httpx.RequestError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+
+        except httpx.HTTPStatusError as e:
+            status_code = e.response.status_code
+            if status_code in [429, 503]:
+                last_error_type = str(status_code)
+            else:
+                last_error_type = "http_error"
+            print(f"⚠️ HTTPStatusError en {url}: {e}")
+        except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
             last_error_type = "network_or_http"
-            print(f"⚠️ Error de red o HTTP en {url}: {e}")
+            print(f"⚠️ Error de red en {url}: {e}")
         except Exception as e:
             last_error_type = "unknown"
             print(f"❌ Unexpected error en {url}: {e}")
             return None, last_error_type
 
         await asyncio.sleep(delay)
-        delay *= random.uniform(1.5, 2.2)  # ⏳ Exponential backoff realista, pero no exagerado
+        delay *= random.uniform(1.4, 2.0)  # 💤 backoff controlado para no saturar
 
     print(f"🛑 Failed fetching {url} after {max_retries} retries.")
     return None, last_error_type
