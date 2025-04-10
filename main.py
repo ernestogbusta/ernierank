@@ -49,19 +49,16 @@ async def startup_event():
         else:
             print("OPENAI_API_KEY detected successfully.", file=sys.stderr)
 
-        timeout = httpx.Timeout(30.0, connect=10.0, read=20.0, write=10.0, pool=20.0)
-        limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+        timeout = httpx.Timeout(60.0, connect=30.0, read=30.0, write=30.0, pool=30.0)
+        limits = httpx.Limits(max_connections=20, max_keepalive_connections=20)
         
         headers = {
-            "User-Agent": "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) "
-                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.184 Mobile Safari/537.36 "
-                          "(compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Encoding": "gzip",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
+            "User-Agent": "Mozilla/5.0 (compatible; Screaming Frog SEO Spider/20.0; +http://www.screamingfrog.co.uk/seo-spider/)",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "es-ES,es;q=0.9",
             "Connection": "keep-alive",
-            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+            "Upgrade-Insecure-Requests": "1",
         }
 
         app.state.client = httpx.AsyncClient(
@@ -108,12 +105,12 @@ async def safe_analyze(url, client, semaphore):
         crawler_mode["current_domain"] = domain
         crawler_mode["error_counter"] = 0
         crawler_mode["safe_mode"] = False
-        crawler_mode["concurrency"] = 5
+        crawler_mode["concurrency"] = 10  # 🆙 Screaming Frog usa 10 conexiones por defecto
         print(f"🌐 Nuevo dominio detectado: {domain}. Reiniciando contadores.")
 
-    concurrency = crawler_mode.get("concurrency", 5)
-    sleep_between_requests = random.uniform(1.5, 3.0) if not crawler_mode["safe_mode"] else random.uniform(5.0, 8.0)
-    max_retries = 5 if not crawler_mode["safe_mode"] else 10
+    concurrency = crawler_mode.get("concurrency", 10)
+    sleep_between_requests = random.uniform(0.8, 1.2) if not crawler_mode["safe_mode"] else random.uniform(3.0, 5.0)
+    max_retries = 10  # 🆙 Igual que configuraste tú y Screaming Frog recomienda
 
     async with semaphore:
         try:
@@ -380,7 +377,7 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
 
     return discovered
 
-async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 1.5):
+async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 10, initial_delay: float = 1.0):
     delay = initial_delay
     last_error_type = None
 
@@ -392,23 +389,16 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
                 return result, None
             else:
                 print(f"⚠️ Empty result en {url} attempt {attempt}")
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in [429, 503]:
-                last_error_type = str(exc.response.status_code)
-                print(f"⏳ {exc.response.status_code} detected en {url}. Backing off...")
-            else:
-                last_error_type = "other_http_error"
-                print(f"❌ HTTP error {exc.response.status_code} en {url}")
-        except (httpx.RequestError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            last_error_type = "timeout_or_network"
-            print(f"⚠️ Network/timeout error en {url}: {e}")
+        except (httpx.HTTPStatusError, httpx.RequestError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            last_error_type = "network_or_http"
+            print(f"⚠️ Error de red o HTTP en {url}: {e}")
         except Exception as e:
             last_error_type = "unknown"
             print(f"❌ Unexpected error en {url}: {e}")
             return None, last_error_type
 
         await asyncio.sleep(delay)
-        delay *= random.uniform(1.5, 2.2)  # ⏳ Exponential backoff, realista
+        delay *= random.uniform(1.5, 2.2)  # ⏳ Exponential backoff realista, pero no exagerado
 
     print(f"🛑 Failed fetching {url} after {max_retries} retries.")
     return None, last_error_type
