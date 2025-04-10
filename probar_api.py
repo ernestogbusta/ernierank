@@ -1,6 +1,7 @@
 import requests
 import json
 import time
+import random
 
 # URL de la API desplegada en Render
 api_url = "https://ernierank-vd20.onrender.com/process_urls_in_batches"
@@ -12,6 +13,7 @@ domain = "https://aulacm.com/"
 headers = {
     "accept": "application/json",
     "Content-Type": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
 }
 
 # Configuración inicial
@@ -51,8 +53,10 @@ while True:
     # Preparar el siguiente batch
     start = data.get("next_batch_start", 0)
 
-    # Pequeña pausa entre batches para ser más respetuoso
-    time.sleep(2)
+    # 💤 Pausa aleatoria entre 1.5 y 4 segundos
+    sleep_time = random.uniform(1.5, 4.0)
+    print(f"⏳ Pausando {sleep_time:.2f} segundos para respetar el servidor...")
+    time.sleep(sleep_time)
 
 # Guardar todos los resultados en un archivo JSON
 output_filename = "resultados_rastreo.json"
