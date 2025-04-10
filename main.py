@@ -132,7 +132,7 @@ async def safe_analyze(url, client, semaphore):
 
     concurrency = crawler_mode.get("concurrency", 10)
     sleep_between_requests = random.uniform(0.6, 0.9) if not crawler_mode["safe_mode"] else random.uniform(3.5, 6.0)
-    max_retries = 12
+    max_retries = 5  # 🚨 No 12. Máximo 5 intentos por URL para no eternizar el batch.
 
     async with semaphore:
         try:
@@ -495,7 +495,7 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
 
     return discovered
 
-async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 12, initial_delay: float = 1.0, custom_headers: dict = None):
+async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 1.0, custom_headers: dict = None):
     delay = initial_delay
     last_error_type = None
 
@@ -512,7 +512,7 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
             status_code = e.response.status_code
             print(f"⚠️ HTTPStatusError ({status_code}) en {url}: {e}")
             if status_code == 502:
-                return None, "502"  # 🔥 Si es 502, salir como error no fatal
+                return None, "502"
             elif status_code in [429, 503]:
                 last_error_type = str(status_code)
             else:
@@ -527,7 +527,7 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
             print(f"❌ Unexpected error en {url}: {e}")
 
         await asyncio.sleep(delay)
-        delay *= random.uniform(1.4, 2.0)
+        delay *= random.uniform(1.2, 1.5)
 
     print(f"🛑 Failed fetching {url} after {max_retries} retries.")
     return None, last_error_type
