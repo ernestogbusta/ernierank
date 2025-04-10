@@ -41,30 +41,34 @@ app = FastAPI(title="ErnieRank API")
 
 @app.on_event("startup")
 async def startup_event():
-    app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not app.state.openai_api_key:
-        print("Failed to detect OPENAI_API_KEY:", file=sys.stderr)
-        raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
-    else:
-        print("OPENAI_API_KEY detected successfully.", file=sys.stderr)
+    try:
+        app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not app.state.openai_api_key:
+            print("Failed to detect OPENAI_API_KEY:", file=sys.stderr)
+            raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
+        else:
+            print("OPENAI_API_KEY detected successfully.", file=sys.stderr)
 
-    timeout = httpx.Timeout(30.0, connect=10.0, read=20.0, write=10.0, pool=20.0)
-    limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Accept": "*/*",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        "Connection": "keep-alive",
-    }
+        timeout = httpx.Timeout(30.0, connect=10.0, read=20.0, write=10.0, pool=20.0)
+        limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+            "Connection": "keep-alive",
+        }
 
-    app.state.client = httpx.AsyncClient(
-        http1=True,
-        timeout=timeout,
-        limits=limits,
-        headers=headers,  # 👉 Ahora SIEMPRE va como navegador
-        follow_redirects=True
-    )
+        app.state.client = httpx.AsyncClient(
+            timeout=timeout,
+            limits=limits,
+            headers=headers,
+            http1=True,
+            follow_redirects=True
+        )
+    except Exception as e:
+        print(f"❌ Error creating AsyncClient: {e}", file=sys.stderr)
+        raise RuntimeError("Failed to initialize Async HTTP Client")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -225,18 +229,18 @@ async def find_sitemaps_in_html(client: httpx.AsyncClient, base_domain: str, hea
 async def fetch_with_retry(client, url, headers, retries=3, delay=5):
     for attempt in range(1, retries + 1):
         try:
-            logger.info(f"🌎 Intento {attempt}: Fetching {url}")
+            print(f"🌎 Intento {attempt}: Fetching {url}")
             response = await client.get(url, headers=headers, timeout=30)
             response.raise_for_status()
-            logger.info(f"✅ Success: {url}")
+            print(f"✅ Success: {url}")
             return response
         except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
-            logger.warning(f"⚠️ Error {e} in {url}. Retrying in {delay} seconds...")
+            print(f"⚠️ Error {e} in {url}. Retrying in {delay} seconds...")
             await asyncio.sleep(delay)
         except Exception as e:
-            logger.error(f"❌ Fatal error fetching {url}: {e}")
+            print(f"❌ Fatal error fetching {url}: {e}")
             break
-    logger.error(f"🛑 Failed after {retries} attempts: {url}")
+    print(f"🛑 Failed after {retries} attempts: {url}")
     return None
 
 async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
@@ -712,16 +716,15 @@ async def fetch_google_search_results(topic, max_attempts=10):
             else:
                 raise HTTPException(status_code=http_err.response.status_code, detail="HTTP error occurred.")
         
-        except RequestException as e:  # Captura de errores relacionados con peticiones HTTP
+        except RequestException as e:
             attempts += 1
             sleep_time = (2 ** attempts) * 5
-            await asyncio.sleep(sleep_time * random.uniform(1.5, 2))
+            time.sleep(sleep_time * random.uniform(1.5, 2))  # CORREGIDO: sleep sin async
             
             if attempts == max_attempts:
                 raise HTTPException(status_code=500, detail=f"Max retries exceeded. Google Trends error: {str(e)}")
     
     raise HTTPException(status_code=500, detail="Could not retrieve Google Trends data after max attempts.")
-
 
 def get_cached_keywords(topic):
     # Función de ejemplo que devuelve keywords cacheadas
