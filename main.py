@@ -38,41 +38,33 @@ from requests.exceptions import HTTPError, RequestException
 import aiohttp
 
 app = FastAPI(title="ErnieRank API")
-# 🧠 Memoria temporal para almacenar el progreso de batches
-batch_results = {}
 
 @app.on_event("startup")
 async def startup_event():
-    try:
-        app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
-        if not app.state.openai_api_key:
-            print("Failed to detect OPENAI_API_KEY:", file=sys.stderr)
-            raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
-        else:
-            print("OPENAI_API_KEY detected successfully.", file=sys.stderr)
+    app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not app.state.openai_api_key:
+        print("Failed to detect OPENAI_API_KEY:", file=sys.stderr)
+        raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
+    else:
+        print("OPENAI_API_KEY detected successfully.", file=sys.stderr)
 
-        timeout = httpx.Timeout(60.0, connect=30.0, read=30.0, write=30.0, pool=30.0)
-        limits = httpx.Limits(max_connections=20, max_keepalive_connections=20)
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (compatible; Screaming Frog SEO Spider/20.0; +http://www.screamingfrog.co.uk/seo-spider/)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Encoding": "gzip, deflate",
-            "Accept-Language": "es-ES,es;q=0.9",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-        }
+    timeout = httpx.Timeout(30.0, connect=10.0, read=20.0, write=10.0, pool=20.0)
+    limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Connection": "keep-alive",
+    }
 
-        app.state.client = httpx.AsyncClient(
-            timeout=timeout,
-            limits=limits,
-            headers=headers,
-            http1=True,
-            follow_redirects=True
-        )
-    except Exception as e:
-        print(f"❌ Error creating AsyncClient: {e}", file=sys.stderr)
-        raise RuntimeError("Failed to initialize Async HTTP Client")
+    app.state.client = httpx.AsyncClient(
+        http1=True,
+        timeout=timeout,
+        limits=limits,
+        headers=headers,  # 👉 Ahora SIEMPRE va como navegador
+        follow_redirects=True
+    )
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -93,211 +85,40 @@ class BatchRequest(BaseModel):
     batch_size: int = 10  # valor por defecto
     start: int = 0        # valor por defecto para iniciar, asegura que siempre tenga un valor
 
-# Definición del modo de rastreo global
-crawler_mode = {
-    "safe_mode": False,
-    "error_counter": 0,
-    "current_domain": None
-}
-
-def get_dynamic_headers():
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.128 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36",
-        "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-        "Mozilla/5.0 (compatible; Screaming Frog SEO Spider/20.0; +http://www.screamingfrog.co.uk/seo-spider/)"
-    ]
-
-    headers = {
-        "User-Agent": random.choice(user_agents),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Encoding": "gzip, deflate",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-        "Connection": "keep-alive",
-        "Referer": "https://www.google.com/",
-        "Upgrade-Insecure-Requests": "1",
-    }
-    return headers
-
-async def safe_analyze(url, client, semaphore):
-    domain = urlparse(url).netloc
-
-    if crawler_mode["current_domain"] != domain:
-        crawler_mode["current_domain"] = domain
-        crawler_mode["error_counter"] = 0
-        crawler_mode["safe_mode"] = False
-        crawler_mode["concurrency"] = 10
-        print(f"🌐 Nuevo dominio detectado: {domain}. Reiniciando contadores.")
-
-    concurrency = crawler_mode.get("concurrency", 10)
-    sleep_between_requests = random.uniform(0.6, 0.9) if not crawler_mode["safe_mode"] else random.uniform(3.5, 6.0)
-    max_retries = 5
-
-    async with semaphore:
-        try:
-            dynamic_headers = get_dynamic_headers()
-            timeout_per_url = 15  # ⏱️ Máximo 15 segundos por URL
-            try:
-                result, error_type = await asyncio.wait_for(
-                    retry_analyze_url(url, client, max_retries=max_retries, custom_headers=dynamic_headers),
-                    timeout=timeout_per_url
-                )
-            except asyncio.TimeoutError:
-                print(f"⏰ Timeout individual: {url} tardó más de {timeout_per_url} segundos. Saltando URL.")
-                crawler_mode["error_counter"] += 1
-                return None
-
-            if not result:
-                if error_type != "502":
-                    crawler_mode["error_counter"] += 1
-                    print(f"⚠️ Error acumulado ({crawler_mode['error_counter']}) en {domain}. Error detectado: {error_type}")
-            else:
-                crawler_mode["error_counter"] = 0
-
-            if error_type in ["429", "503", "network_or_http", "unknown"]:
-                crawler_mode["safe_mode"] = True
-                crawler_mode["concurrency"] = 1
-                print(f"🚨 Server unstable detected. Switching to SAFE MODE para {domain} (por {error_type}).")
-
-            if crawler_mode["error_counter"] >= 3:
-                crawler_mode["safe_mode"] = True
-                crawler_mode["concurrency"] = 1
-
-            await asyncio.sleep(sleep_between_requests)
-            return result
-
-        except Exception as e:
-            crawler_mode["error_counter"] += 1
-            print(f"❌ Excepción grave analizando {url}: {e} | Error count: {crawler_mode['error_counter']}")
-            if crawler_mode["error_counter"] >= 3:
-                crawler_mode["safe_mode"] = True
-                crawler_mode["concurrency"] = 1
-            await asyncio.sleep(sleep_between_requests)
-            return None
-
-@app.post("/start_batch")
-async def start_batch(request: BatchRequest, background_tasks: BackgroundTasks):
-    batch_id = f"batch_{int(time.time())}"  # 🔥 batch ID único basado en timestamp
-    batch_results[batch_id] = {
-        "status": "processing",
-        "processed_urls": [],
-        "start_index": request.start
-    }
-    background_tasks.add_task(process_batch_background, batch_id, request)
-    return {"message": "Batch started", "batch_id": batch_id}
-
-async def process_batch_background(batch_id: str, request: BatchRequest):
-    domain = request.domain.rstrip('/')
-    print(f"🔎 (Background) Fetching URLs from domain: {domain}")
-
-    urls = await fetch_sitemap(app.state.client, domain) or []
-
-    if not urls:
-        batch_results[batch_id]["status"] = "failed"
-        return
-
-    urls_to_process = urls[request.start:request.start + request.batch_size]
-
-    if not urls_to_process:
-        batch_results[batch_id]["status"] = "done"
-        return
-
-    concurrency = crawler_mode.get("concurrency", 10)
-    semaphore = asyncio.Semaphore(concurrency)
-
-    tasks = [safe_analyze(url, app.state.client, semaphore) for url in urls_to_process]
-    results = await asyncio.gather(*tasks)
-
-    valid_results = [
-        {
-            "url": result['url'],
-            "title": result.get('title', "No title provided"),
-            "meta_description": result.get('meta_description', "No description provided"),
-            "slug": urlparse(result['url']).path,
-            "h1_tags": result.get('h1_tags', []),
-            "h2_tags": result.get('h2_tags', []),
-            "main_keyword": result.get('main_keyword', "Not specified"),
-            "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
-        }
-        for result in results if result
-    ]
-
-    batch_results[batch_id]["processed_urls"] = valid_results
-    batch_results[batch_id]["status"] = "done"
-
-@app.get("/get_batch_result/{batch_id}")
-async def get_batch_result(batch_id: str):
-    if batch_id not in batch_results:
-        raise HTTPException(status_code=404, detail="Batch ID not found")
-
-    return batch_results[batch_id]
-
-@app.post("/full_process_domain")
-async def full_process_domain(request: BatchRequest):
-    domain = request.domain.rstrip('/')
-    batch_size = request.batch_size
-    start = request.start
-
-    print(f"🚀 Iniciando procesamiento completo de {domain}")
-
-    all_processed_urls = []
-
-    while True:
-        print(f"🔎 Procesando batch desde índice {start}")
-
-        batch_request = BatchRequest(
-            domain=domain,
-            batch_size=batch_size,
-            start=start
-        )
-        response = await process_urls_in_batches(batch_request)
-
-        batch_processed = response.get("processed_urls", [])
-        more_batches = response.get("more_batches", False)
-        next_start = response.get("next_batch_start", 0)
-
-        all_processed_urls.extend(batch_processed)
-
-        if not more_batches:
-            print("✅ Todos los batches procesados.")
-            break
-
-        start = next_start  # Preparar el siguiente batch
-
-    return {
-        "total_urls_processed": len(all_processed_urls),
-        "processed_urls": all_processed_urls
-    }
 
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     domain = request.domain.rstrip('/')
-    print(f"🔎 Fetching URLs from domain: {domain}")
+    print(f"Fetching URLs from domain: {domain}")
 
-    urls = await fetch_sitemap(app.state.client, domain) or []
-
+    urls = await fetch_sitemap(app.state.client, domain)
     if not urls:
         print("🚫 No URLs found in sitemap.")
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
+    print(f"✅ Total URLs fetched: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
-
     if not urls_to_process:
         print("🚫 No URLs to process in this batch.")
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
-    concurrency = crawler_mode.get("concurrency", 10)
-    semaphore = asyncio.Semaphore(concurrency)
+    semaphore = asyncio.Semaphore(5)
 
-    timeout_batch = 45  # ⏱️ Máximo 45 segundos para todo el batch
-    try:
-        tasks = [safe_analyze(url, app.state.client, semaphore) for url in urls_to_process]
-        results = await asyncio.wait_for(asyncio.gather(*tasks), timeout=timeout_batch)
-    except asyncio.TimeoutError:
-        print(f"⏰ Timeout de batch: más de {timeout_batch} segundos. Cortando procesamiento.")
-        results = []
+    async def sem_analyze_url(url):
+        async with semaphore:
+            try:
+                result = await retry_analyze_url(url, app.state.client)
+                await asyncio.sleep(2)  # 💤 Espera de 2 segundos entre peticiones para evitar baneos
+                return result
+            except Exception as e:
+                print(f"❌ Error procesando {url}: {e}")
+                return None
+
+    tasks = [sem_analyze_url(url) for url in urls_to_process]
+    results = await asyncio.gather(*tasks)
+
+    successful_results = [r for r in results if r]
+    print(f"✅ Results received: {len(successful_results)} successful, {len(results) - len(successful_results)} failed.")
 
     valid_results = [
         {
@@ -309,14 +130,14 @@ async def process_urls_in_batches(request: BatchRequest):
             "h2_tags": result.get('h2_tags', []),
             "main_keyword": result.get('main_keyword', "Not specified"),
             "secondary_keywords": result.get('secondary_keywords', []),
-            "semantic_search_intent": result.get('semantic_search_intent', "Not specified")
+            "semantic_search_intent": result.get('semantic_search_intent', "Not specified"),
+            "content": result.get('content', "")
         }
-        for result in results if result
+        for result in successful_results
     ]
 
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
-
     print(f"🔄 More batches pending: {more_batches} | Next batch start index: {next_start}")
 
     return {
@@ -329,72 +150,15 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
     for attempt in range(retries):
         try:
             response = await client.get(sitemap_url, headers=headers, timeout=30, follow_redirects=True)
-
             if response.status_code == 200:
-                content_encoding = response.headers.get("Content-Encoding", "").lower()
-                content_type = response.headers.get("Content-Type", "").lower()
-                content = response.content
-
-                if 'gzip' in content_encoding or sitemap_url.endswith('.gz'):
-                    try:
-                        content = gzip.decompress(content)
-                        print(f"✅ Contenido GZIP descomprimido en {sitemap_url}")
-                    except Exception as e:
-                        print(f"⚠️ Error descomprimiendo GZIP en {sitemap_url}: {e}")
-
-                content_strip = content.lstrip()
-
-                # 🔥 Detectamos si realmente es XML o si es un HTML renderizado como XML
-                if content_strip.startswith(b"<?xml") or content_strip.startswith(b"<urlset") or content_strip.startswith(b"<sitemapindex"):
-                    print(f"✅ Sitemap XML detectado correctamente en {sitemap_url}")
-                    return await parse_sitemap_from_content(content, sitemap_url, client, headers)
-                
-                elif b"<html" in content_strip[:500].lower():
-                    print(f"⚠️ Parece HTML en vez de XML en {sitemap_url}... intentando extraer sitemaps de HTML")
-                    return await find_sitemaps_in_html_from_content(content, sitemap_url, client, headers)
-                
-                else:
-                    print(f"⚠️ Contenido no parece XML ni HTML reconocible en {sitemap_url}")
-                    return []
-
-            else:
-                print(f"⚠️ Código HTTP inesperado {response.status_code} en {sitemap_url}")
-
+                return await parse_sitemap(response, sitemap_url, client, headers)
         except (httpx.RequestError, httpx.RemoteProtocolError) as e:
             print(f"⚠️ Error de conexión en {sitemap_url}: {e} (Intento {attempt+1}/{retries})")
             await asyncio.sleep(2 * (attempt + 1))
         except Exception as e:
             print(f"❌ Error inesperado en {sitemap_url}: {e}")
             break
-
     return []
-
-async def parse_sitemap_from_content(content: bytes, sitemap_url: str, client: httpx.AsyncClient, headers: dict):
-    try:
-        data = xmltodict.parse(content)
-
-        if 'urlset' in data:
-            urls = data['urlset'].get('url', [])
-            if isinstance(urls, dict):
-                urls = [urls]
-            return [entry['loc'] for entry in urls if 'loc' in entry]
-
-        elif 'sitemapindex' in data:
-            nested = data['sitemapindex'].get('sitemap', [])
-            if isinstance(nested, dict):
-                nested = [nested]
-            all_nested_urls = []
-            for sitemap in nested:
-                loc = sitemap.get('loc')
-                if loc:
-                    nested_urls = await try_fetch_and_parse_sitemap(client, loc, headers)
-                    if nested_urls:
-                        all_nested_urls.extend(nested_urls)
-            return all_nested_urls
-
-    except Exception as e:
-        print(f"⚠️ Error parseando sitemap {sitemap_url}: {e}")
-        return []
 
 async def find_sitemaps_in_html(client: httpx.AsyncClient, base_domain: str, headers: dict):
     try:
@@ -416,53 +180,29 @@ async def find_sitemaps_in_html(client: httpx.AsyncClient, base_domain: str, hea
         print(f"⚠️ Error buscando sitemaps en HTML {base_domain}: {e}")
     return set()
 
-async def find_sitemaps_in_html_from_content(content: bytes, base_url: str, client: httpx.AsyncClient, headers: dict):
-    try:
-        soup = BeautifulSoup(content, 'html.parser')
-        sitemap_urls = [
-            urljoin(base_url, a['href'])
-            for a in soup.find_all('a', href=True)
-            if 'sitemap' in a['href'] and a['href'].endswith(('.xml', '.gz'))
-        ]
-        urls_collected = set()
-        for sitemap_url in sitemap_urls:
-            urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)
-            if urls:
-                urls_collected.update(urls)
-        return urls_collected
-    except Exception as e:
-        print(f"⚠️ Error buscando sitemaps dentro del contenido HTML en {base_url}: {e}")
-    return set()
-
-
 async def fetch_with_retry(client, url, headers, retries=3, delay=5):
     for attempt in range(1, retries + 1):
         try:
-            print(f"🌎 Intento {attempt}: Fetching {url}")
+            logger.info(f"🌎 Intento {attempt}: Fetching {url}")
             response = await client.get(url, headers=headers, timeout=30)
             response.raise_for_status()
-            print(f"✅ Success: {url}")
+            logger.info(f"✅ Success: {url}")
             return response
         except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
-            print(f"⚠️ Error {e} in {url}. Retrying in {delay} seconds...")
+            logger.warning(f"⚠️ Error {e} in {url}. Retrying in {delay} seconds...")
             await asyncio.sleep(delay)
         except Exception as e:
-            print(f"❌ Fatal error fetching {url}: {e}")
+            logger.error(f"❌ Fatal error fetching {url}: {e}")
             break
-    print(f"🛑 Failed after {retries} attempts: {url}")
+    logger.error(f"🛑 Failed after {retries} attempts: {url}")
     return None
 
 async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 6.0.1; Nexus 5X Build/MMB29P) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.184 Mobile Safari/537.36 "
-                      "(compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Encoding": "gzip",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-        "Connection": "keep-alive",
-        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Accept": "application/xml,text/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive"
     }
 
     base_domain = urlparse(base_url).scheme + "://" + urlparse(base_url).netloc
@@ -477,28 +217,10 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 
     # 1. Probar los candidatos conocidos
     for sitemap_url in sitemap_candidates:
-        response = await fetch_with_retry(client, sitemap_url, headers)
-        if response:
-            content_type = response.headers.get("Content-Type", "").lower()
-            content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
-
-            # Verificar si es XML
-            if content.lstrip().startswith(b"<"):
-                urls = await parse_sitemap(response, sitemap_url, client, headers)
-                if urls:
-                    collected_urls.update(urls)
-                    break  # ✅ Si encontramos uno válido, paramos
-            else:
-                # Si parece HTML, probar a buscar sitemaps dentro del contenido
-                if b"<html" in content.lower():
-                    print(f"⚡ Detectado HTML en {sitemap_url}. Buscando posibles links de sitemaps dentro del contenido...")
-                    urls_in_html = await find_sitemaps_in_html_from_content(content, sitemap_url, client, headers)
-                    if urls_in_html:
-                        collected_urls.update(urls_in_html)
-                        break
-
-        else:
-            print(f"⚠️ No se pudo obtener {sitemap_url}")
+        urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)
+        if urls:
+            collected_urls.update(urls)
+            break  # ✅ Si uno funciona, no sigas probando los demás
 
     # 2. Buscar en robots.txt si no encontró antes
     if not collected_urls:
@@ -508,12 +230,10 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
             if urls:
                 collected_urls.update(urls)
 
-    # 3. Buscar en la home HTML si no encontró nada
+    # 3. Buscar en la home HTML
     if not collected_urls:
-        print(f"🔎 Buscando sitemaps en la home {base_domain}")
         urls = await find_sitemaps_in_html(client, base_domain, headers)
-        if urls:
-            collected_urls.update(urls)
+        collected_urls.update(urls)
 
     if not collected_urls:
         print(f"🚫 No se encontraron URLs en {base_domain}")
@@ -604,42 +324,30 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
 
     return discovered
 
-async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 1.0, custom_headers: dict = None):
+async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 1.5):
+    """
+    Reintenta analizar una URL varias veces con backoff exponencial si falla, usando headers de navegador.
+    """
     delay = initial_delay
-    last_error_type = None
-
     for attempt in range(1, max_retries + 1):
         try:
             print(f"🔄 Attempt {attempt} fetching: {url}")
-            result = await analyze_url(url, client, headers=custom_headers)
+            result = await analyze_url(url, client)
             if result:
-                return result, None
+                return result
             else:
-                print(f"⚠️ Empty result en {url} attempt {attempt}")
-
-        except httpx.HTTPStatusError as e:
-            status_code = e.response.status_code
-            print(f"⚠️ HTTPStatusError ({status_code}) en {url}: {e}")
-            if status_code == 502:
-                return None, "502"
-            elif status_code in [429, 503]:
-                last_error_type = str(status_code)
-            else:
-                last_error_type = "http_error"
-
+                print(f"⚠️ Empty result for {url} attempt {attempt}")
         except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            last_error_type = "network_or_http"
-            print(f"⚠️ Error de red en {url}: {e}")
-
+            print(f"⚠️ Connection error on {url} at attempt {attempt}: {e}")
         except Exception as e:
-            last_error_type = "unknown"
-            print(f"❌ Unexpected error en {url}: {e}")
-
+            print(f"❌ Unexpected error on {url}: {e}")
+            return None
+        
         await asyncio.sleep(delay)
-        delay *= random.uniform(1.2, 1.5)
+        delay *= 2  # Exponential backoff
 
     print(f"🛑 Failed fetching {url} after {max_retries} retries.")
-    return None, last_error_type
+    return None
 
 
 ############################################
@@ -954,15 +662,16 @@ async def fetch_google_search_results(topic, max_attempts=10):
             else:
                 raise HTTPException(status_code=http_err.response.status_code, detail="HTTP error occurred.")
         
-        except RequestException as e:
+        except RequestException as e:  # Captura de errores relacionados con peticiones HTTP
             attempts += 1
             sleep_time = (2 ** attempts) * 5
-            time.sleep(sleep_time * random.uniform(1.5, 2))  # CORREGIDO: sleep sin async
+            await asyncio.sleep(sleep_time * random.uniform(1.5, 2))
             
             if attempts == max_attempts:
                 raise HTTPException(status_code=500, detail=f"Max retries exceeded. Google Trends error: {str(e)}")
     
     raise HTTPException(status_code=500, detail="Could not retrieve Google Trends data after max attempts.")
+
 
 def get_cached_keywords(topic):
     # Función de ejemplo que devuelve keywords cacheadas
