@@ -43,10 +43,7 @@ app = FastAPI(title="ErnieRank API")
 async def startup_event():
     app.state.openai_api_key = os.getenv("OPENAI_API_KEY")
     if not app.state.openai_api_key:
-        print("Failed to detect OPENAI_API_KEY:", file=sys.stderr)
         raise RuntimeError("OPENAI_API_KEY is not set in the environment variables")
-    else:
-        print("OPENAI_API_KEY detected successfully.", file=sys.stderr)
 
     timeout = httpx.Timeout(30.0, connect=10.0, read=20.0, write=10.0, pool=20.0)
     limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
@@ -89,17 +86,13 @@ class BatchRequest(BaseModel):
 @app.post("/process_urls_in_batches")
 async def process_urls_in_batches(request: BatchRequest):
     domain = request.domain.rstrip('/')
-    print(f"Fetching URLs from domain: {domain}")
 
     urls = await fetch_sitemap(app.state.client, domain)
     if not urls:
-        print("🚫 No URLs found in sitemap.")
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
-    print(f"✅ Total URLs fetched: {len(urls)}")
     urls_to_process = urls[request.start:request.start + request.batch_size]
     if not urls_to_process:
-        print("🚫 No URLs to process in this batch.")
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
     semaphore = asyncio.Semaphore(5)
@@ -111,14 +104,12 @@ async def process_urls_in_batches(request: BatchRequest):
                 await asyncio.sleep(2)  # 💤 Espera de 2 segundos entre peticiones para evitar baneos
                 return result
             except Exception as e:
-                print(f"❌ Error procesando {url}: {e}")
                 return None
 
     tasks = [sem_analyze_url(url) for url in urls_to_process]
     results = await asyncio.gather(*tasks)
 
     successful_results = [r for r in results if r]
-    print(f"✅ Results received: {len(successful_results)} successful, {len(results) - len(successful_results)} failed.")
 
     valid_results = [
         {
@@ -138,7 +129,6 @@ async def process_urls_in_batches(request: BatchRequest):
 
     next_start = request.start + len(urls_to_process)
     more_batches = next_start < len(urls)
-    print(f"🔄 More batches pending: {more_batches} | Next batch start index: {next_start}")
 
     return {
         "processed_urls": valid_results,
@@ -153,10 +143,8 @@ async def try_fetch_and_parse_sitemap(client: httpx.AsyncClient, sitemap_url: st
             if response.status_code == 200:
                 return await parse_sitemap(response, sitemap_url, client, headers)
         except (httpx.RequestError, httpx.RemoteProtocolError) as e:
-            print(f"⚠️ Error de conexión en {sitemap_url}: {e} (Intento {attempt+1}/{retries})")
             await asyncio.sleep(2 * (attempt + 1))
         except Exception as e:
-            print(f"❌ Error inesperado en {sitemap_url}: {e}")
             break
     return []
 
@@ -177,8 +165,7 @@ async def find_sitemaps_in_html(client: httpx.AsyncClient, base_domain: str, hea
                     urls_collected.update(urls)
             return urls_collected
     except Exception as e:
-        print(f"⚠️ Error buscando sitemaps en HTML {base_domain}: {e}")
-    return set()
+        return set()
 
 async def fetch_with_retry(client, url, headers, retries=3, delay=5):
     for attempt in range(1, retries + 1):
@@ -236,10 +223,8 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
         collected_urls.update(urls)
 
     if not collected_urls:
-        print(f"🚫 No se encontraron URLs en {base_domain}")
         return None
 
-    print(f"✅ Total URLs encontradas: {len(collected_urls)}")
     return list(collected_urls)
 
 async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient, headers: dict):
@@ -247,7 +232,6 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
         content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
         # Primera verificación rápida
         if not content.lstrip().startswith(b"<"):
-            print(f"⚠️ No parece XML válido en {sitemap_url}")
             return []
 
         data = xmltodict.parse(content)
@@ -272,7 +256,6 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
             return all_nested_urls
 
     except Exception as e:
-        print(f"⚠️ Error parseando sitemap {sitemap_url}: {e}")
         return []
 
 async def fetch_individual_sitemap(client: httpx.AsyncClient, sitemap_url: str, headers: dict) -> list:
@@ -301,9 +284,7 @@ async def fetch_individual_sitemap(client: httpx.AsyncClient, sitemap_url: str, 
                             all_nested_urls.extend(nested_urls)
                 return all_nested_urls
     except Exception as e:
-        print(f"⚠️ Error descargando o parseando sitemap individual {sitemap_url}: {e}")
-
-    return []
+        return []
 
 async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_domain: str, headers: dict) -> list:
     robots_url = f"{base_domain}/robots.txt"
@@ -318,11 +299,12 @@ async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_doma
                     sitemap_url = line.split(':', 1)[1].strip()
                     discovered.append(sitemap_url)
         else:
-            print(f"⚠️ No se pudo acceder a robots.txt en {robots_url}")
+            pass  # o cualquier otra lógica que quieras
     except Exception as e:
-        print(f"⚠️ Error leyendo robots.txt en {robots_url}: {e}")
+        return discovered
 
     return discovered
+
 
 async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: int = 5, initial_delay: float = 1.5):
     """
@@ -331,22 +313,17 @@ async def retry_analyze_url(url: str, client: httpx.AsyncClient, max_retries: in
     delay = initial_delay
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"🔄 Attempt {attempt} fetching: {url}")
             result = await analyze_url(url, client)
             if result:
                 return result
-            else:
-                print(f"⚠️ Empty result for {url} attempt {attempt}")
         except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
-            print(f"⚠️ Connection error on {url} at attempt {attempt}: {e}")
+            pass
         except Exception as e:
-            print(f"❌ Unexpected error on {url}: {e}")
             return None
         
         await asyncio.sleep(delay)
         delay *= 2  # Exponential backoff
 
-    print(f"🛑 Failed fetching {url} after {max_retries} retries.")
     return None
 
 
@@ -378,14 +355,7 @@ def check_server_availability(url):
         response.raise_for_status()
         return True
     except requests.exceptions.RequestException as e:
-        print(f"Server not available for {url}: {str(e)}")
         return False
-
-# Llamada a la función
-if check_server_availability('https://example.com'):
-    print("Procede con la obtención del tamaño de los recursos")
-else:
-    print("El servidor no está disponible. Intenta más tarde.")
 
 class WPORequest(BaseModel):
     url: str
@@ -748,4 +718,4 @@ async def analyze_robots_endpoint(request: RobotsTxtRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=10000, log_level="debug")
+    uvicorn.run(app, host="0.0.0.0", port=10000, log_level="warning")
