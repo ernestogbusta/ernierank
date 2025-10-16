@@ -99,7 +99,7 @@ async def process_urls_in_batches(request: BatchRequest):
     if not urls_to_process:
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
-    semaphore = asyncio.Semaphore(5)
+    semaphore = asyncio.Semaphore(1)
 
     async def sem_analyze_url(url):
         async with semaphore:
