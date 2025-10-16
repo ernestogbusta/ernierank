@@ -6,6 +6,7 @@ async-timeout==4.0.3
 attrs==23.2.0
 backoff==2.2.1
 beautifulsoup4==4.12.3
+Brotli==1.1.0
 bs4==0.0.2
 cachetools==5.3.3
 certifi==2024.2.2
@@ -14,9 +15,12 @@ click==8.1.7
 fastapi==0.110.1
 frozenlist==1.4.1
 h11==0.14.0
+h2==4.2.0
 hiredis==2.3.2
+hpack==4.1.0
 httpcore==1.0.5
 httpx==0.27.0
+hyperframe==6.1.0
 idna==3.7
 iniconfig==2.0.0
 joblib==1.4.0

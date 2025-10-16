@@ -37,6 +37,8 @@ import gzip
 from requests.exceptions import HTTPError, RequestException
 import aiohttp
 import logging
+import brotli
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ErnieRank API")
@@ -231,9 +233,15 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 
 async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient, headers: dict) -> list:
     try:
-        content = gzip.decompress(response.content) if sitemap_url.endswith('.gz') else response.content
+        # 👇 Descompresión robusta según encabezado o extensión
+        if response.headers.get('Content-Encoding') == 'br':
+            content = brotli.decompress(response.content)
+        elif response.headers.get('Content-Encoding') == 'gzip' or sitemap_url.endswith('.gz'):
+            content = gzip.decompress(response.content)
+        else:
+            content = response.content
 
-        # Verifica que el contenido sea XML válido
+        # Validación básica de contenido
         if not content.lstrip().startswith(b"<"):
             print(f"⚠️ Contenido inválido en {sitemap_url}")
             return []
@@ -264,7 +272,6 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
     except Exception as e:
         print(f"❌ Error parseando {sitemap_url}: {e}")
         return []
-
 
 async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_domain: str, headers: dict) -> list:
     robots_url = f"{base_domain}/robots.txt"
