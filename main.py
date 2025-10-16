@@ -233,13 +233,8 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 
 async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient, headers: dict) -> list:
     try:
-        # 👇 Descompresión robusta según encabezado o extensión
-        if response.headers.get('Content-Encoding') == 'br':
-            content = brotli.decompress(response.content)
-        elif response.headers.get('Content-Encoding') == 'gzip' or sitemap_url.endswith('.gz'):
-            content = gzip.decompress(response.content)
-        else:
-            content = response.content
+        # ✅ No hagas descompresión manual: httpx ya lo hace
+        content = response.content
 
         # Validación básica de contenido
         if not content.lstrip().startswith(b"<"):
@@ -272,6 +267,7 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
     except Exception as e:
         print(f"❌ Error parseando {sitemap_url}: {e}")
         return []
+
 
 async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_domain: str, headers: dict) -> list:
     robots_url = f"{base_domain}/robots.txt"
