@@ -241,22 +241,29 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 
 async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient, headers: dict) -> list:
     try:
-        # ✅ No hagas descompresión manual: httpx ya lo hace
-        content = response.content
+        # ⚙️ Descompresión según headers o extensión
+        if response.headers.get('Content-Encoding') == 'br':
+            content = brotli.decompress(response.content)
+        elif response.headers.get('Content-Encoding') == 'gzip' or sitemap_url.endswith('.gz'):
+            content = gzip.decompress(response.content)
+        else:
+            content = response.content
 
-        # Validación básica de contenido
+        # 🧪 Validación básica
         if not content.lstrip().startswith(b"<"):
             print(f"⚠️ Contenido inválido en {sitemap_url}")
             return []
 
         data = xmltodict.parse(content)
 
+        # ✅ Caso: Sitemap normal con <urlset>
         if 'urlset' in data:
             urls = data['urlset'].get('url', [])
             if isinstance(urls, dict):
                 urls = [urls]
             return [entry['loc'] for entry in urls if 'loc' in entry]
 
+        # ✅ Caso: Sitemap index con <sitemapindex>
         elif 'sitemapindex' in data:
             nested = data['sitemapindex'].get('sitemap', [])
             if isinstance(nested, dict):
@@ -271,6 +278,10 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
                         nested_urls = await parse_sitemap(nested_response, loc, client, headers)
                         all_nested_urls.extend(nested_urls)
             return all_nested_urls
+
+        else:
+            print(f"⚠️ Formato desconocido en sitemap: {sitemap_url}")
+            return []
 
     except Exception as e:
         print(f"❌ Error parseando {sitemap_url}: {e}")
