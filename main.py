@@ -60,12 +60,18 @@ async def startup_event():
     }
 
     app.state.client = httpx.AsyncClient(
-        http1=True,
-        timeout=timeout,
-        limits=limits,
-        headers=headers,  # 👉 Ahora SIEMPRE va como navegador
-        follow_redirects=True
-    )
+    http2=False,  # 🔥 EVITA HTTP/2 que da problemas en Raiola/Webempresa
+    timeout=timeout,
+    limits=limits,
+    headers={
+        "User-Agent": "Mozilla/5.0 (compatible; ErnieBot/1.0; +https://erniestudio.com/bot)",
+        "Accept": "application/xml,text/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
+        "Accept-Encoding": "gzip, deflate",  # ❌ SIN brotli
+        "Connection": "keep-alive",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"
+    },
+    follow_redirects=True
+)
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -99,13 +105,14 @@ async def process_urls_in_batches(request: BatchRequest):
     if not urls_to_process:
         return {"processed_urls": [], "more_batches": False, "next_batch_start": 0}
 
+    # ⚠️ Limitar a 1 petición concurrente para evitar bloqueos en servidores compartidos
     semaphore = asyncio.Semaphore(1)
 
     async def sem_analyze_url(url):
         async with semaphore:
             try:
+                await asyncio.sleep(3)  # 💤 Espera antes de la petición (importante en WordPress + Firewalls)
                 result = await retry_analyze_url(url, app.state.client)
-                await asyncio.sleep(2)  # 💤 Espera de 2 segundos entre peticiones para evitar baneos
                 return result
             except Exception as e:
                 return None
@@ -190,7 +197,7 @@ async def fetch_with_retry(client, url, headers, retries=3, delay=5):
 
 async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_2_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         "Accept": "application/xml,text/xml,application/xhtml+xml,text/html;q=0.9,*/*;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive"
@@ -206,14 +213,14 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 
     collected_urls = set()
 
-    # 1. Probar los candidatos conocidos
+    # 1️⃣ Probar los candidatos conocidos (orden de prioridad)
     for sitemap_url in sitemap_candidates:
         urls = await try_fetch_and_parse_sitemap(client, sitemap_url, headers)
         if urls:
             collected_urls.update(urls)
-            break  # ✅ Si uno funciona, no sigas probando los demás
+            break  # ✅ Si uno funciona, paramos aquí
 
-    # 2. Buscar en robots.txt si no encontró antes
+    # 2️⃣ Buscar en robots.txt si no se encontró nada aún
     if not collected_urls:
         robots_sitemaps = await discover_sitemaps_from_robots_txt(client, base_domain, headers)
         for sitemap_url in robots_sitemaps:
@@ -221,12 +228,13 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
             if urls:
                 collected_urls.update(urls)
 
-    # 3. Buscar en la home HTML
+    # 3️⃣ Buscar en la home HTML (último recurso)
     if not collected_urls:
         urls = await find_sitemaps_in_html(client, base_domain, headers)
         collected_urls.update(urls)
 
     if not collected_urls:
+        print(f"⚠️ No se encontraron URLs en ningún sitemap para {base_domain}")
         return None
 
     return list(collected_urls)
