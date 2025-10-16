@@ -178,21 +178,29 @@ async def find_sitemaps_in_html(client: httpx.AsyncClient, base_domain: str, hea
     except Exception as e:
         return set()
 
-async def fetch_with_retry(client, url, headers, retries=3, delay=5):
+async def fetch_with_retry(client: httpx.AsyncClient, url: str, headers: dict, retries: int = 5, delay: float = 5.0) -> Optional[httpx.Response]:
     for attempt in range(1, retries + 1):
         try:
             logger.info(f"🌎 Intento {attempt}: Fetching {url}")
-            response = await client.get(url, headers=headers, timeout=30)
+            response = await client.get(
+                url,
+                headers=headers,
+                timeout=30.0
+            )
             response.raise_for_status()
             logger.info(f"✅ Success: {url}")
             return response
-        except (httpx.RequestError, httpx.RemoteProtocolError, httpx.ReadTimeout) as e:
-            logger.warning(f"⚠️ Error {e} in {url}. Retrying in {delay} seconds...")
+        except (httpx.RemoteProtocolError, httpx.ReadTimeout, httpx.ConnectTimeout) as e:
+            logger.warning(f"⚠️ Conexión interrumpida ({type(e).__name__}): {e}. Reintentando en {delay}s...")
+            await asyncio.sleep(delay)
+        except httpx.RequestError as e:
+            logger.warning(f"⚠️ Error de red: {e}. Reintentando en {delay}s...")
             await asyncio.sleep(delay)
         except Exception as e:
-            logger.error(f"❌ Fatal error fetching {url}: {e}")
+            logger.error(f"❌ Error inesperado: {e}")
             break
-    logger.error(f"🛑 Failed after {retries} attempts: {url}")
+        delay *= 2  # Backoff exponencial
+    logger.error(f"🛑 Falló definitivamente: {url}")
     return None
 
 async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
@@ -241,10 +249,8 @@ async def fetch_sitemap(client: httpx.AsyncClient, base_url: str):
 
 async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: httpx.AsyncClient, headers: dict) -> list:
     try:
-        # ✅ No hagas descompresión manual: httpx ya lo hace
-        content = response.content
+        content = response.content  # httpx ya maneja Brotli y Gzip automáticamente
 
-        # Validación básica de contenido
         if not content.lstrip().startswith(b"<"):
             print(f"⚠️ Contenido inválido en {sitemap_url}")
             return []
@@ -275,6 +281,7 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
     except Exception as e:
         print(f"❌ Error parseando {sitemap_url}: {e}")
         return []
+
 
 
 async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_domain: str, headers: dict) -> list:
