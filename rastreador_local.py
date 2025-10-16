@@ -1,0 +1,43 @@
+import requests
+import time
+
+API_URL = "http://127.0.0.1:10000/process_urls_in_batches"
+DOMAIN = "https://boanorte.es/"
+BATCH_SIZE = 10
+
+start = 0
+todas_las_urls = []
+
+print(f"🔎 Iniciando rastreo SEO LOCAL en: {DOMAIN}\n")
+
+while True:
+    payload = {
+        "domain": DOMAIN,
+        "batch_size": BATCH_SIZE,
+        "start": start
+    }
+
+    response = requests.post(API_URL, json=payload)
+
+    if response.status_code != 200:
+        print(f"❌ Error en lote {start}: {response.status_code}")
+        print(response.text)
+        break
+
+    data = response.json()
+    urls_lote = data.get("processed_urls", [])
+    todas_las_urls.extend(urls_lote)
+
+    print(f"✅ Lote {start} procesado. URLs extraídas: {len(urls_lote)}")
+
+    if not data.get("more_batches", False):
+        break
+
+    start = data.get("next_batch_start", start + BATCH_SIZE)
+    time.sleep(0)  # pausa de cortesía
+
+print(f"\n📦 Total de URLs procesadas: {len(todas_las_urls)}")
+
+# Opcional: mostrar resumen
+for url in todas_las_urls:
+    print(f"- {url['url']} — INTENT: {url['semantic_search_intent']}")
