@@ -36,6 +36,8 @@ import random
 import gzip
 from requests.exceptions import HTTPError, RequestException
 import aiohttp
+import logging
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="ErnieRank API")
 
@@ -262,7 +264,7 @@ async def parse_sitemap(response: httpx.Response, sitemap_url: str, client: http
     except Exception as e:
         print(f"❌ Error parseando {sitemap_url}: {e}")
         return []
-        
+
 
 async def discover_sitemaps_from_robots_txt(client: httpx.AsyncClient, base_domain: str, headers: dict) -> list:
     robots_url = f"{base_domain}/robots.txt"
